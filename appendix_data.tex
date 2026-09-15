@@ -1,0 +1,153 @@
+\section{Name Matching Details}
+\label{app:matching_details}
+
+The usage analysis in RQ1 requires joining two independently-maintained name
+spaces: OpenRouter's routing slugs (347 distinct \texttt{permaslug}s appear in
+the daily top-50 between Jan.\ 2025 and Jun.\ 2026) and LMArena's model names
+(364 distinct names in the same window). The two disagree on provider prefixes
+(\texttt{anthropic/}), on routing-variant suffixes (\texttt{:free},
+\texttt{:nitro}), on whether a release carries a date stamp and in what format
+(\texttt{-20260217} vs.\ \texttt{-2026-02-17} vs.\ nothing), and on
+preview-to-GA renames. We match in three layers, each of which either produces a
+unique match or abstains.
+
+\paragraph{Layer 1: canonical token multiset.} We lowercase the slug, drop
+everything before the last \texttt{/} and everything after a \texttt{:}, and
+split the remainder into maximal alphabetic and numeric runs. Two names match if
+their sorted multisets of alphabetic tokens \emph{and} of numeric tokens agree,
+which makes the comparison insensitive to component order
+(\texttt{qwen3-32b-instruct} vs.\ \texttt{qwen3-instruct-32b}) and to separator
+style. A match is accepted only when exactly one Arena name shares the key;
+ambiguous keys are left unmatched. This yields 89 matches.
+
+\paragraph{Layer 2: date-stamp deletion.} We repeat Layer 1 after deleting
+numeric tokens that are exactly 8 digits long, i.e.\ genuine
+\texttt{YYYYMMDD} stamps, again requiring uniqueness. This yields a further 30
+matches. We deliberately stop here rather than applying general fuzzy or
+trailing-token trimming: more permissive rules silently produce wrong matches
+(trimming trailing numerics collapses \texttt{kimi-k2.5} into \texttt{kimi-k2}),
+and a wrong match is far more damaging here than an abstention, since it
+attributes real token volume to the wrong capability profile.
+
+\paragraph{Layer 3: hand-verified overrides.} Every remaining OpenRouter model
+with material token volume was read and either linked by hand or explicitly left
+unmatched. The override table has 60 entries, keyed on the base slug so that
+routing variants of the same model inherit the mapping; it resolves 73 of the
+347 slugs. Entries are tagged \emph{high} confidence (46 entries; pure formatting
+or token-order differences, or a single obvious date-dropped candidate, e.g.\
+\texttt{grok-4-07-09}$\to$\texttt{grok-4-0709}) or \emph{medium} (14 entries;
+a genuine judgment call, such as mapping a bare undated alias to the more recent
+of two dated Arena checkpoints, choosing among reasoning-effort variants of the
+same release, or picking the reference precision variant when OpenRouter does
+not distinguish bf16 from fp8).
+
+\paragraph{Deliberate exclusions.} Some OpenRouter models have no defensible
+Arena counterpart and are left unmatched by design rather than by failure:
+OpenRouter's stealth/cloaked pre-release codenames (\texttt{owl-alpha},
+\texttt{horizon-beta}, \texttt{quasar-alpha}, and roughly fifteen others), for
+which no reliable public mapping to the eventual release name exists; embedding
+models; vision-only, safety, base, and distilled checkpoints that are not
+separately rated in the Arena text categories; and niche community fine-tunes
+never submitted to the Arena.
+
+\paragraph{Coverage and treatment of the remainder.} The three layers together
+match 192 of 347 slugs (89 exact, 30 after date deletion, 73 override; of the
+override matches, 56 are high- and 17 medium-confidence), covering 83.5\% of
+pooled token volume and a mean of 79.2\% of monthly volume, ranging from 60.7\%
+to 91.5\% across the 18 months. Coverage dips when a heavily-used release is new
+enough not to be aliased yet; the largest single unmatched models are
+\texttt{grok-code-fast-1} (4.1\% of pooled tokens),
+\texttt{gemini-2.5-flash-lite} (2.4\%), and the stealth slug
+\texttt{owl-alpha} (1.0\%). Throughout, unmatched volume is treated as
+\emph{not} lying within any threshold of the top-rated model, so the
+near-frontier usage shares we report are a conservative floor on the true
+concentration of usage near the frontier, and the reported share curve cannot
+exceed the matched-coverage ceiling by construction.
+
+\section{Open Source Models}
+\label{app:open_source_models}
+
+The scaling analysis in RQ2 needs capability scores and an observable measure of
+investment for the same models. We take scores from the Open LLM Leaderboard's
+per-model results (3,861 leaderboard rows) on its six objective capability
+dimensions --- IFEval, BBH, MATH Level 5, GPQA, MuSR, and MMLU-Pro --- and
+parameter counts from the associated Hugging Face repository metadata. We drop
+rows with missing or zero parameter counts (10 rows) and rows the leaderboard
+flags as contaminated or as weight merges (none survive into our sample in this
+snapshot). Each of the six dimensions is standardized to zero mean and unit
+variance across this full 3,851-model pool \emph{before} any lab restriction, so
+that the scale of a slope is set by the leaderboard as a whole rather than by
+the subsample we ultimately fit on; without this, the six panels of
+Figure~\ref{fig:scaling_curves_normalized} would not be comparable, since the
+underlying benchmarks have very different raw ranges.
+
+\paragraph{Which organizations.} The leaderboard contains 650 distinct uploading
+organizations, the large majority of which are community fine-tunes of someone
+else's base model. For those, parameter count reflects the technology of the
+base-model provider rather than of the uploader, so a fitted scaling slope would
+not be that organization's production function. We therefore restrict to 17
+hand-identified organizations that pre-train their own models, and then require
+a genuine scaling ladder to fit against: at least 7 models, spanning at least
+$10^{0.6}\approx4\times$ in parameter count, at at least 4 distinct sizes.
+Table~\ref{tab:ollm_lab_screen} reports the screen. Fifteen labs survive,
+covering 293 leaderboard rows over 278 distinct repositories (a repository
+re-submitted under a later revision contributes more than one row; we keep both
+as independent evaluation runs, and all cross-validation splits are by
+repository so that duplicate rows never straddle a train/test boundary). The
+retained models span 0.08B to 140.6B parameters and upload dates from March 2022
+to March 2025, and are 136 instruction-tuned, 113 base, and 44 other
+checkpoints; all slope fits include an instruction-tuned indicator so that a
+lab's mix of base and post-trained releases cannot masquerade as a scaling
+response.
+
+\begin{table}[t]
+    \centering
+    \begin{tabular}{lccccc}
+        \toprule
+        Lab & Models & Rows & Sizes & Param.\ range (B) & Span (dex) \\
+        \midrule
+        Qwen           & 58 & 60 & 22 & 0.49--111.2 & 2.35 \\
+        Google         & 29 & 32 & 17 & 0.08--27.2  & 2.55 \\
+        IBM Granite    & 20 & 20 &  7 & 1.33--8.2   & 0.79 \\
+        Meta           & 19 & 20 &  7 & 1.24--70.6  & 1.76 \\
+        NousResearch   & 19 & 19 & 12 & 3.21--70.6  & 1.34 \\
+        Microsoft      & 16 & 18 & 11 & 0.34--42.0  & 2.09 \\
+        Mistral        & 16 & 18 & 11 & 7.24--140.6 & 1.29 \\
+        NVIDIA         & 18 & 18 & 13 & 1.52--72.7  & 1.68 \\
+        AI2            & 14 & 16 &  9 & 1.18--70.6  & 1.78 \\
+        TII            & 16 & 16 &  8 & 1.67--40.0  & 1.38 \\
+        HuggingFaceTB  & 12 & 14 &  6 & 0.13--1.7   & 1.12 \\
+        EleutherAI     & 12 & 12 & 12 & 0.15--20.7  & 2.14 \\
+        Arcee AI       & 10 & 11 &  8 & 3.09--72.7  & 1.37 \\
+        DeepSeek       & 11 & 11 &  9 & 1.78--70.6  & 1.60 \\
+        Cohere For AI  &  8 &  8 &  4 & 8.03--103.8 & 1.11 \\
+        \midrule
+        \textit{01.AI}       & \textit{19} & \textit{19} & \textit{3} & \textit{6.06--34.4} & \textit{0.75} \\
+        \textit{BigScience}  &  \textit{5} &  \textit{5} & \textit{5} & \textit{0.56--7.1}  & \textit{1.10} \\
+        \bottomrule
+    \end{tabular}
+    \caption{The open-weight lab screen. ``Models'' counts distinct Hugging Face
+    repositories and ``Rows'' counts leaderboard submissions; ``Sizes'' is the
+    number of distinct parameter counts and ``Span'' is
+    $\log_{10}(\max/\min)$ of parameter count. The two italicized labs fail the
+    screen: 01.AI has ample models but only 3 distinct sizes over a $0.75$-dex
+    range, and BigScience has too few models, so neither supports a per-lab
+    scaling fit.}
+    \label{tab:ollm_lab_screen}
+\end{table}
+
+\paragraph{Limitations.} Three caveats bound what this sample can identify.
+First, parameter count is only a partial proxy for investment: it omits the
+training token budget, so two labs at the same parameter count may sit at very
+different points on the compute frontier, and a lab whose releases are
+systematically over- or under-trained relative to the pool will have its slope
+mis-attributed to technology rather than to token budget. Second, the sample is
+open-weight by necessity --- parameter counts are simply not published for the
+closed frontier flagships that drive RQ1 --- so the labs here are not the same
+labs, and the estimated scaling behavior should not be read as a direct estimate
+of the frontier firms' production functions. Third, two of the fifteen retained
+labs (Arcee AI and NousResearch) primarily fine-tune others' base models rather
+than pre-train, so their fitted scaling response is partly derivative of the
+base-model providers'; we retain them because they pass the ladder screen and
+excluding them does not change the qualitative conclusions, but their per-lab
+slopes should be read with that in mind.

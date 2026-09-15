@@ -1,0 +1,287 @@
+\documentclass[msom,blindrev]{informs3_ExtAbst}
+
+\OneAndAHalfSpacedXI % current default line spacing
+%%\OneAndAHalfSpacedXII 
+%%\DoubleSpacedXII
+%%\DoubleSpacedXI
+
+% If hyperref is used, dvi-to-ps driver of choice must be declared as
+%   an additional option to the \documentstyle. For example
+%\documentclass[dvips,mnsc]{informs3}      % if dvips is used
+%\documentclass[dvipsone,mnsc]{informs3}   % if dvipsone is used, etc.
+
+% Private macros here (check that there is no clash with the style)
+
+% Natbib setup for author-year style
+\usepackage[numbers]{natbib}
+ % \bibpunct[, ]{(}{)}{,}{a}{}{,}%
+ % \def\bibfont{\small}%
+ % \def\bibsep{\smallskipamount}%
+ % \def\bibhang{24pt}%
+ % \def\newblock{\ }%
+ % \def\BIBand{and}%
+\usepackage{array}
+%% Setup of theorem styles. Outcomment only one.
+%% Preferred default is the first option.
+\TheoremsNumberedThrough     % Preferred (Theorem 1, Lemma 1, Theorem 2)
+%\TheoremsNumberedByChapter  % (Theorem 1.1, Lema 1.1, Theorem 1.2)
+\ECRepeatTheorems
+\usepackage{bbm}
+\usepackage[table,xcdraw]{xcolor}
+\usepackage{enumitem}
+\usepackage{bm} 
+\usepackage{subcaption}
+\usepackage{caption}
+\usepackage{graphicx}
+\newcommand{\NS}[1]{\textcolor{red}{#1}}
+%% Setup of the equation numbering system. Outcomment only one.
+%% Preferred default is the first option.
+\EquationsNumberedThrough    % Default: (1), (2), ...
+%\EquationsNumberedBySection % (1.1), (1.2), ...
+
+% For new submissions, leave this number blank.
+% For revisions, input the manuscript number assigned by the on-line
+% system along with a suffix ".Rx" where x is the revision number.
+% \MANUSCRIPTNO{MS-0001-1922.65}
+
+
+% Packages and Commands
+\usepackage[xindy, acronyms]{glossaries}   % Glossaries and 
+\usepackage{booktabs}
+
+\usepackage{url}
+\def\UrlBreaks{\do\/\do-}
+\usepackage{breakurl}
+\usepackage[breaklinks]{hyperref}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Pb}{\mathbb{P}}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{hyperref}
+
+\providecommand{\newblock}{}
+
+
+% \usepackage{geometry}
+% \geometry{a4paper, margin=1in}
+% \usepackage{hyperref}
+% \usepackage{graphicx}
+% \usepackage{xcolor}
+% \usepackage{amsmath}
+% \usepackage{amssymb}
+% \usepackage{algorithm}
+% \usepackage{algpseudocode}
+
+% --- Clean Todo Box Setup ---
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{todoblock}{
+  colback=gray!8!white,       % Light grey background (change to blue!5!white for soft blue)
+  colframe=gray!30!white,     % Subtle border that blends nicely
+  boxrule=1pt,                % Thin border
+  arc=4pt,                    % Softly rounded corners
+  width=\linewidth,           % Forces it to be exactly as wide as the text
+  boxsep=8pt,                 % Breathing room inside the box
+  left=10pt, right=10pt, top=8pt, bottom=8pt,
+  before skip=12pt,           % Spacing before the box
+  after skip=12pt             % Spacing after the box
+}
+% ----------------------------
+
+\begin{document}
+
+
+
+\TITLE{Evaluation and Homogeneity in LLMs}
+% \vspace{-3em}
+\maketitle
+
+\section{Model}
+Our core model consists of $N$ firms, each of which competes on $K$ dimensions.
+Each firm has a budget $B_{i}$, where they can spend their effort $\mathbf{x}_{i} \in \mathbb{R}^{K}$ across the $K$ dimensions.
+Here, putting in effort $x_{i,k}$ produces an output $\theta_{i,k} = f(x_{i,k}).$
+The goal is to maximize performance according to a central evaluator, which ranks models based on ``win-rate''; performance against other models.
+Here, battles are against other models on the $K$ different topics, each with probability $w_{k}$, where $\mathbf{w} \in \Delta$ is a vector set by the central evaluator based on submitted prompts. 
+That is, firm $i$ selects $\mathbf{x}_{i}$ to maximize the Bradley-Terry win-rate against other models: 
+\[
+\max_{\mathbf{x}_{i}} \sum_{i' \neq i} \mathbb{E}_{y \sim \mathrm{Cat}(\mathbf{w})}[\sigma(f(x_{i,y}) - f(x_{i',y}))].
+\]
+Here, $\sigma$ is a Sigmoid function capturing Bradley-Terry preferences between voters, and $y$ is a random category (e.g., ``Math'' prompts). 
+This is subject to a budget constraint: 
+\[
+\sum_{k=1}^{K} x_{i,k} \leq B_{i}.
+\]
+We denote the social welfare according to a user distribution $\mathbf{v} \in \Delta$; for a user $y \sim \mathrm{Cat}(\mathbf{v})$, they receive utility $\max \theta_{i,y}$, so that the social welfare is 
+\[
+\sum_{k=1}^{K} v_{k} \max\limits_{i}  \theta_{i,k}
+\]
+
+\begin{todoblock}
+    Currently, we assume that the objective function is only a function of $\mathbf{w}$; it would be interesting to see what would happen if the objective function is some combination of $\mathbf{w}$ to $\mathbf{v}$, and add an extra strategic element.  
+\end{todoblock}
+
+\section{Equilibrium under $f(x)=\log x$}
+As intuition for the problem, we sketch the solution/equilibrium for this problem in the setting where $f(x) = \log x$. 
+Our goal is to find what the equilibrium is for $\mathbf{x}_{i}$; how much effort will each firm put in? 
+We first show that the effort allocation factorizes as $x_{i,k} = \alpha_{i} w_{k}$, where $\alpha_{i}$ is firm-specific. 
+\begin{lemma} 
+The equilibrium solution is $x_{i,k} = \alpha_{i} w_{k}$, where $\alpha_{i}$ is a firm-specific coefficient that increases with larger budget $B_{i}$. 
+\end{lemma}
+\begin{proof}
+    \textbf{Sketch:} 
+    Consider the optimization problem for each firm $i$
+    \[
+    \min -\sum_{i'} \sum_{k} w_{k} \sigma(f(x_{i,k})-f(x_{i',k})),
+    \]
+    with the budget constraint $\sum x_{i,k} = B_{i}$. 
+    Then KKT conditions with $f(x) = \log x$ show that 
+    \[
+    w_{k} \sum_{i'} \frac{x_{i',k}}{(x_{i,k} + x_{i',k})^2}  = \lambda_{i}-\mu_{i,k}.
+    \]
+    If $x_{i,k} = \alpha_{i} w_{k}$ (for any $x_{i,k} > 0$), we have that
+    \[
+    w_{k} \sum_{i'} \frac{\alpha_{i'} w_{k}}{w_{k}^2 (\alpha_{i}+\alpha_{i'})^2} = \sum_{i'} \frac{\alpha_{i'}}{(\alpha_{i}+\alpha_{i'})^2} = \lambda_{i}. 
+    \]
+    This is constant and only dependent on $i$.
+    Since the objective is concave and the constraint set is convex, the KKT conditions are sufficient for a global optimum; the unique optimum is $x_{i,k} = B_{i} w_{k}$, where $\alpha_i = B_i$ follows from the budget constraint $\sum_k x_{i,k} = B_i$ and $\sum_k w_k = 1$.
+\end{proof}
+\begin{corollary}
+    When $f(x) = \log(x)$, firms are maximally homogeneous; $\cos(\mathbf{x}_{i},\mathbf{x}_{j}) = 1$. 
+\end{corollary}
+
+Using this structure, we find that budget constrained firms still compete on all dimensions, but are simply Pareto-worse versions of the best model. 
+That is, because $\mathbf{w}$ controls the direction of investment, $\alpha_{i}$ only controls the scale of investment. 
+Because $\sum x_{i,k} = B_{i}$, we have that $\alpha_{i} = B_{i}$, and so budget-constrained firms simply invest less in each dimension. 
+
+We next show that when $f(x) = \log x$, the welfare loss is proportional to $\mathrm{KL}(\mathbf{v}\|\mathbf{w})$:
+\begin{lemma}
+    When $f(x) = \log x$, if $\mathbf{x}_{i}$ is the equilibrium with evaluator weights $\mathbf{w}$, and $\mathbf{x}^{*}_{i}$ is the socially optimal allocation (i.e., the equilibrium under $\mathbf{w} = \mathbf{v}$), then the social welfare loss is
+    \[
+    \sum_{k} v_{k}  \max\limits_{i} f(x^*_{i,k}) - \sum_{k} v_{k} \max\limits_{i} f(x_{i,k}) = \mathrm{KL}(\mathbf{v} \| \mathbf{w}).
+    \]
+\end{lemma}
+\begin{proof}
+    \textbf{Sketch:} Because all firms invest in the same directions, the optimal firm in each dimension is firm 1 (assuming $B_{1} \geq B_{2} \cdots B_{N}$), so only firm 1's investment determines welfare.
+    The equilibrium gives $x_{1,k} = B_1 w_k$, and the socially optimal allocation is $x^{*}_{1,k} = B_{1} v_{k}$.
+    The welfare loss is
+    \[
+    \sum_{k} v_{k} \bigl[\log(B_1 v_k) - \log(B_1 w_k)\bigr] = \sum_{k} v_{k} \log \frac{v_{k}}{w_{k}} = \mathrm{KL}(\mathbf{v} \| \mathbf{w}).
+    \]
+\end{proof}
+
+\begin{todoblock}
+    It would be interesting to investigate what happens with increasing $B_{i}$ over time with different $f$ and different settings of increasing $B$. Intuitively, increasing $B$ linearly leads to winrates getting near 50\%, as $\theta$ values compress.  
+\end{todoblock}
+\begin{todoblock}
+    It would be interesting to see what incorporating price or brand-related factors would induce as an equilibrium 
+\end{todoblock}
+\begin{todoblock}
+    It would be interesting to see what would happen if $w$ varied over time, or in response to model performance somehow. 
+\end{todoblock}
+
+\section{General $f$ Equilibrium}
+Computing the explicit equilibrium for general $f$ is messy because $\sigma(f(x_{i,k})-f(x_{j,k}))$ cannot be factored to only depend on $i$ and $j$. 
+However, $f$ directly impacts the level of homogeneity through the function $\Omega_{f} = xf'(x)$; when $\Omega_{f}$ is constant, solutions are homogeneous, while when $\Omega_{f}$ varies, solutions are heterogeneous. 
+To capture this intuition, we start from the KKT solution, and approximate $c = \frac{\lambda_{i}}{\sum_{i'} \sigma'(f(x_{i,k})-f(x_{i',k}))}$ as a constant: 
+\[
+f'(x_{i,k}) = \frac{c}{w_{k}}.
+\]
+Then we can write 
+\[
+\frac{\mathrm{d}x_{i,k}}{\mathrm{d} \log w_{k}} = \frac{x}{1-\frac{d \log \Omega_{f}}{d \log x}}.
+\]
+When $\frac{d \log \Omega_{f}}{d \log x} = 0$, $x_{i,k}$ scales with maximum homogeneity (which exactly corresponds to $f(x) = \log x$). 
+However, when $\Omega_{f}(x)$ is increasing in $x$, there are higher returns for larger $x$, implying that $x_{i,k}$ is increasingly concentrated at larger $w_{k}$ for higher budgets. 
+
+Formally, we can show comparative statics depending on $\Omega_{f}(x)$: 
+\begin{theorem}
+    If, for any $a,b$, we have that 
+    \[
+    |\Omega_{f}(a)-\Omega_{f}(b)| \leq |\Omega_{g}(a)-\Omega_{g}(b)|,
+    \]
+    then $\mathrm{Var}[\log f'(x_{i,k})-\log f'(x_{j,k})] \leq \mathrm{Var}[\log g'(x_{i,k})-\log g'(x_{j,k})] $.
+\end{theorem}
+\begin{proof}
+    \textbf{Sketch:} 
+    By KKT, we can write this as 
+    \[
+    H_{i,j} = \mathrm{Var}[\log S_{j,k}-\log S_{i,k}] \leq \max_{k,k'} | (\log S_{j,k} - \log S_{i,k}) - (\log S_{j,k'}-\log S_{i,k'})|. 
+    \]
+    By the Lipschitzness of $\sigma'$, and noting that $\sigma' > S > 0$, we can bound this as 
+    \begin{align} 
+    \max_{k,k'} | (\log S_{j,k} - \log S_{i,k}) - (\log S_{j,k'}-\log S_{i,k'})| \leq \frac{L}{S}|(f(x_{i,k})-f(x_{j,k})) - (f(x_{i,k'})-f(x_{j,k'}))| \\ 
+    \leq \frac{L}{S} \sup\limits_{a,b} | \Omega_{f}(a)-\Omega_{f}(b)| \cdot | \log x_{i,k}-\log x_{i,k'}|
+    \end{align}
+    The last depends only on $f$ through $|\Omega_{f}(a)-\Omega_{f}(b)|$. 
+    Note that the full proof requires showing tightness in this bound; currently we just show that the upper bound is larger, but a full proof needs to show that this implies differences in $H_{i,j}$ itself. 
+\end{proof}
+
+We can similarly show that the optimal $w$ for welfare depends on $\Omega$; because the value of $\Omega$ induces under or overinvestment in certain $w_{k}$, inverting $\Omega$ and setting $w$ can undo this change. 
+We can show this formally: 
+\begin{theorem}
+    The optimal $w^{*}_{k} \propto \frac{v_{k}}{\Omega_{f}(x^{*}_{k})/\bar{\Omega}}$, where
+    \[
+    \bar{\Omega} = \frac{1}{K} \sum_{k=1}^{K} v_{k} \Omega_{f}(x^{*}_{k}).
+    \]
+\end{theorem}
+\begin{proof}
+    \textbf{Sketch:} The welfare $W$ is 
+    \[
+    W = \sum_{k} v_{k} \max_{i} f(x_{i,k}(\mathbf{w})).
+    \]
+    We can find the optimal $\mathbf{w}$ by Taylor approximating $\frac{\mathrm{d}W}{\mathrm{d}w_k}$ as
+    \[
+    \frac{\mathrm{d}W}{\mathrm{d}w_k} = v_{k} f'(x^{*}_{k}) \frac{\mathrm{d} x^{*}_{k}}{\mathrm{d} \log w_{k}}.
+    \]
+    Setting this equal across all $k$ (simplex first-order condition) and simplifying gives
+    \[
+    v_{k} \Omega_{f}(x^{*}_{k}) = \frac{1}{K} \sum_{k'} v_{k'} \Omega_{f}(x^{*}_{k'}) = \bar{\Omega}.
+    \]
+    From the first-order approximation $f'(x^*_k) = c/w_k$ we have $w_k \propto 1/f'(x^*_k) = x^*_k/\Omega_f(x^*_k)$.  Substituting $\Omega_f(x^*_k) = \bar{\Omega}/v_k$ (from above) gives
+    \[
+    w_{k} \propto \frac{x^{*}_{k}}{\Omega_{f}(x^{*}_{k})} = \frac{v_k \, \Omega^{-1}_{f}(\bar{\Omega}/v_k)}{\bar{\Omega}}.
+    \]
+\end{proof}
+
+\section{Empirical Verification}
+We run experiments with the Arena dataset to understand what this model looks like in practice.
+
+\paragraph{Win Rate Decay}
+We first investigate win-rate decay and what drives it.
+For each landmark frontier model, the ELO advantage above the field median decays approximately linearly over time.
+This is consistent with the model under $f(x) = \log x$ and exponentially growing $B_i$: if each firm's budget grows at the same exponential rate, the ELO gap above median falls linearly.
+The compression is substantial---win-rate variance among the top-20 Arena models has fallen approximately $6\times$ from 2023 to 2026 (ELO standard deviation roughly halved)---and is symmetric across organizations, consistent with genuine cross-lab convergence in budgets rather than any single lab's strategic behavior.
+
+\paragraph{Production function $f$}
+Chinchilla scaling laws~\citep{chinchilla} predict that benchmark performance grows as $\log(\text{compute})$, which implies $f(x) = \log x$ in our model.
+This is empirically supported: Arena ELO for the best model grows linearly in time (equivalent to $\log$ in compute if compute scales exponentially), and benchmark scores fit a $\log$ curve in parameter count with $r^2 \approx 0.7$--$0.9$.
+Under $f(x) = \log x$, Lemma~1 predicts maximal homogeneity ($\cos(\mathbf{x}_i, \mathbf{x}_j) = 1$).
+This is borne out: pairwise Spearman correlation of BBH subtask accuracy vectors across frontier models from different organizations is 0.848 ($p < 0.0001$), and cross-category win-rate rank correlations in Arena battles range from 0.787 to 0.910---consistent with a largely one-dimensional capability surface.
+
+\paragraph{Differences in $w$ and $v$}
+Under $f(x) = \log x$, Lemma~2 gives $w^{*} = v$ with welfare loss $\mathrm{KL}(\mathbf{v} \| \mathbf{w})$.
+We estimate $\mathbf{w}$ from Arena leaderboard vote counts by category and $\mathbf{v}$ from the distribution of task types in 116,000 organic Arena battles.
+The two distributions differ most in math: $\mathbf{w}$ assigns roughly $1.5\times$ more weight to math than $\mathbf{v}$, so the recommendation is to downweight math in the evaluation to reduce the $\mathrm{KL}$ welfare loss.
+\NS{NOTE: We need to do a bit more research to understand whether this discrepancy is actually the best estimate of $\mathbf{w}$ and $\mathbf{v}$, or if we can find a better estimate.} 
+
+\section{Related Work}
+\paragraph{Monoculture in Markets}
+Prior work investigates monoculture in markets, including for matching and hiring~\citep{monoculture_matching,monoculture_social_welfare}. 
+Our work similarly studies monoculture in an LLM market, but differs in that we study how \textit{evaluation} impacts these. 
+
+\paragraph{Markets for LLMs}
+Work using economics tools to analyze LLMs have looked at the relationship between LLM competition and social welfare~\citep{bayes_risk}, competition in marketplaces~\citep{competition_alignment}, and how model aggregations impact diversity~\citep{aggregation_model_diversity}. 
+Our work differs in that we analyze the impact of evaluation as an information signal, with competition rather than aggregation between models. 
+
+\paragraph{Blotto Games}
+Blotto games study how different firms should allocate resources under competition, and includes Lottery Blotto, which mimics the same probabilistic win rate~\citep{lottery_blotto}; our key difference is that we study how the evaluation mechanism (the choice of $\mathbf{w}$) shapes equilibrium allocations and social welfare.
+Lottery Blotto also implicitly focuses only on the $f(x) = \log x$ case. 
+
+\paragraph{Pricing and LLMs}
+Prior work on pricing in language models examines how providers should offer contracts, and shows that contracts should be per-token rather than user-specific~\citep{menu_pricing}. 
+Our work differs in our focus on firm allocations rather than user behavior, and on evaluation rather than pricing. 
+
+\bibliographystyle{apalike}
+\bibliography{references}
+
+\end{document}
+
