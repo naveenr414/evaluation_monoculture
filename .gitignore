@@ -4,11 +4,12 @@ hf_token.txt
 .env
 .env.*
 
-# Data (large; regenerate with collect_data.py)
-data/
+# Data (large; not on GitHub -- move, never delete)
+raw_data/
+processed_data/
+_archive/data/
 *.parquet
 *.csv
-!data/**/README.md
 
 # Stray scp/rsync artifacts
 naveenr@*
