@@ -1,16 +1,31 @@
-"""Figures for the firm-similarity results, all computed by `similarity.py`.
+"""Every figure and table in the paper, drawn from `similarity`, `catchup`
+and `crowding`.
 
-Each figure is a small function that pulls what it needs from `similarity`,
-draws it, and saves a PDF into `plots/`. Nothing here computes a statistic --
-if a number appears in a figure it came from `similarity`, so the figure and
-the writeup cannot drift apart.
+Each figure is a small function that pulls what it needs from those three
+modules, draws it, and saves a PDF into `plots/`. Nothing here computes a
+statistic: if a number appears in a figure it came from one of them, so the
+figures and the text cannot drift apart.
 
-    cosine_kde         observed pairwise cosines against the permutation null
-    cosine_heatmap     the pairwise cosine matrix at one snapshot, clustered
-    variance_shares    how much of theta the firm and category means absorb
+Experiment A, specialization:
+    cosine_kde           observed pairwise cosines against the permutation null
+    cosine_heatmap       the mean pairwise cosine matrix, hierarchically ordered
     residual_timeseries  (org, category) residual trajectories over the panel
 
-The panel is loaded once and shared, since every figure wants the same one.
+Experiment A, catch-up:
+    gap_vs_dtheta        improvement against the gap, one line per firm
+    beta_forest          the same betas with their intervals
+    beta_by_level        beta once the outgoing model's rating is controlled for
+    confounds_table      beta under every robustness cut (LaTeX to stdout)
+    spec_ladder_table    beta under each fixed-effect spec (LaTeX to stdout)
+
+Experiment B, the shrinking top:
+    top_rank_gaps        leader-to-rank-r distance, per snapshot
+    top_distribution     shortfall from the leader by quantile of the field
+    usage_within_points  token share served from within x points of the top
+    effective_number     effective number of deployed models and firms
+
+The snapshot panel is loaded once and shared, and the event panel is built once
+on the first figure that needs it.
 
 Usage:
     python3 scripts/make_figures.py --figure all
@@ -28,12 +43,10 @@ from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 from scipy.spatial.distance import squareform
 from scipy.stats import gaussian_kde
 
-import pandas as pd
-
 import catchup
 import crowding
 import similarity as S
-from common import CORE, PLOTS, within
+from common import CORE, PLOTS
 
 INK, MUTED, GRID, BASELINE, SURFACE = '#0b0b0b', '#898781', '#e1e0d9', '#c3c2b7', '#ffffff'
 BLUE, ORANGE = '#2a78d6', '#eb6834'
@@ -61,8 +74,8 @@ PAIR_FONT = 4
 # top_distribution.pdf, usage_within_points.pdf and effective_number.pdf are
 # laid out as a row of three. They are drawn one-third of the width a
 # three-panel figure gets here, so including each at 0.33\textwidth renders
-# their text at the same size as the panels of near_top_counts.pdf. The font
-# offset keeps labels legible once the panel is this narrow.
+# their text at the same size as a three-panel strip. The font offset keeps
+# labels legible once the panel is this narrow.
 TRIO_SIZE = (PAIR_WIDTH * 1.35 / 3, 1.75)
 TRIO_FONT = -2
 
@@ -180,6 +193,21 @@ def save(fig, name):
     fig.savefig(path, bbox_inches='tight')
     plt.close(fig)
     print(f'  wrote {path.relative_to(PLOTS.parent)}')
+
+
+def per_firm_fits(events):
+    """`catchup.beta_per_firm`, computed once per event panel
+
+    gap_vs_dtheta and beta_forest draw the same estimates two ways, and the
+    fits take about a second, so the second figure reuses the first's.
+
+    Arguments:
+        events: Event panel from catchup.build_event_panel
+
+    Returns: Dict keyed by firm, as `catchup.beta_per_firm` returns it"""
+    if 'per_firm_fits' not in events.attrs:
+        events.attrs['per_firm_fits'] = catchup.beta_per_firm(events)
+    return events.attrs['per_firm_fits']
 
 
 def make_cosine_kde(panel):
@@ -302,49 +330,15 @@ def make_cosine_heatmap(panel):
     save(fig, 'residual_cosine_heatmap.pdf')
 
 
-def make_variance_shares(panel):
-    """Share of raw theta variance absorbed by firm and category means
-
-    The point of the figure is the size of the leftover: ~96% of the spread in
-    raw ratings is "this firm is good" plus "this category is easy", and every
-    firm-specific profile has to live in the remaining few percent.
+def trailing_run(series):
+    """How long the residual has held its current sign, in snapshots
 
     Arguments:
-        panel: (d, orgs) from similarity.load_default_panel
+        series: Residual series for one (org, category), NaNs already dropped
 
-    Returns: None; writes variance_shares.pdf"""
-    d, orgs = panel
-    shares = S.variance_shares_by_period(S.residual_panel(d, orgs))
-    print(shares.assign(explained=lambda t: (100 * t.explained).round(1),
-                        residual=lambda t: (100 * t.residual).round(1),
-                        residual_sd=lambda t: t.residual_sd.round(1)).to_string())
-
-    x = np.arange(len(shares))
-    labels = [f'{p.year}Q{p.quarter}' for p in shares.index]
-
-    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(7.4, 2.6), width_ratios=[1.6, 1])
-    ax.bar(x, 100 * shares.residual, color=ORANGE, width=0.62, lw=0)
-    for xi, v in zip(x, 100 * shares.residual):
-        ax.text(xi, v + 0.12, f'{v:.1f}', ha='center', fontsize=8.5, color=INK)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha='right')
-    ax.set_ylabel('residual share of variance (%)')
-    ax.set_ylim(0, max(100 * shares.residual) * 1.35)
-    ax.grid(axis='y', color=GRID, lw=0.6)
-    ax.set_axisbelow(True)
-    strip_axes(ax)
-
-    ax2.plot(x, shares.residual_sd, color=BLUE, lw=1.6, marker='o', ms=4)
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(labels, rotation=45, ha='right')
-    ax2.set_ylabel('residual sd (rating points)')
-    ax2.set_ylim(0, shares.residual_sd.max() * 1.25)
-    ax2.grid(axis='y', color=GRID, lw=0.6)
-    ax2.set_axisbelow(True)
-    strip_axes(ax2)
-
-    fig.tight_layout(pad=0.6)
-    save(fig, 'variance_shares.pdf')
+    Returns: Int, length of the run of one sign ending at the last value"""
+    same_sign = np.sign(series) == np.sign(series.iloc[-1])
+    return int(same_sign.iloc[::-1].cumprod().sum())
 
 
 def make_residual_timeseries(panel, n_highlight=2, smooth=5):
@@ -365,9 +359,8 @@ def make_residual_timeseries(panel, n_highlight=2, smooth=5):
     wide = rp.pivot_table(index='dt', columns=['org', 'category'], values='residual')
     wide = wide.rolling(smooth, min_periods=2).mean()
 
-    streaks = {col: (np.sign(wide[col].dropna()) == np.sign(wide[col].dropna()).iloc[-1]
-                     ).iloc[::-1].cumprod().sum()
-               for col in wide.columns if wide[col].notna().sum() > smooth}
+    streaks = {col: trailing_run(wide[col].dropna()) for col in wide.columns
+               if wide[col].notna().sum() > smooth}
     top = sorted(streaks, key=streaks.get, reverse=True)[:n_highlight]
     print('  highlighted:', ', '.join(f'{label_org(o)}/{DISPLAY_CAT.get(c, c)}'
                                       for o, c in top))
@@ -391,7 +384,7 @@ def make_residual_timeseries(panel, n_highlight=2, smooth=5):
     save(fig, 'residual_timeseries.pdf')
 
 
-def make_gap_vs_dtheta(panel, events):
+def make_gap_vs_dtheta(events):
     """Improvement against the gap, one noise-corrected line per firm
 
     Both axes are residualized on event and category, so the comparison is
@@ -402,8 +395,11 @@ def make_gap_vs_dtheta(panel, events):
     Singling out individual firms here invited reading a single line as a
     result; the per-firm estimates and their intervals are in beta_forest.pdf.
 
+    Arguments:
+        events: Event panel from catchup.load_events
+
     Returns: None; writes gap_vs_dtheta.pdf"""
-    fits = catchup.beta_per_firm(events)
+    fits = per_firm_fits(events)
     order = sorted(fits, key=lambda f: -fits[f]['corrected'])
     for f in order:
         r = fits[f]
@@ -417,29 +413,16 @@ def make_gap_vs_dtheta(panel, events):
     # the lines into a fan that is mostly extrapolation
     xmax, ymax = np.percentile(np.abs(gaps), 97), np.percentile(np.abs(dthetas), 97)
 
-    # No firm is called out: every firm line goes into the band.
-    named = []
-
     with plt.rc_context(bigger_text()):
         fig, ax = plt.subplots(figsize=PAIR_SIZE)
         grid = np.linspace(-xmax, xmax, 50)
 
         ax.scatter(gaps, dthetas, s=7, color=OTHER_FIRM, alpha=0.30, lw=0, zorder=2)
         for firm in order:
-            if firm in named:
-                continue
             ax.plot(grid, fits[firm]['corrected'] * grid, color=OTHER_FIRM, lw=1.0,
                     alpha=0.85, zorder=3)
-
         ax.plot(grid, pooled['corrected'] * grid, color=INK, lw=2.4, zorder=5,
                 label=rf'pooled $\hat\beta$={pooled["corrected"]:+.2f}')
-        for firm in named:
-            r = fits[firm]
-            ax.scatter(r['gap'], r['dtheta'], s=12, color=firm_color(firm),
-                       alpha=0.75, lw=0, zorder=4)
-            ax.plot(grid, r['corrected'] * grid, color=firm_color(firm), lw=2.4,
-                    zorder=5,
-                    label=rf'{label_org(firm)} $\hat\beta$={r["corrected"]:+.2f}')
 
         ax.axhline(0, color=BASELINE, lw=0.8, zorder=1)
         ax.axvline(0, color=BASELINE, lw=0.8, zorder=1)
@@ -459,15 +442,18 @@ def make_gap_vs_dtheta(panel, events):
         save(fig, 'gap_vs_dtheta.pdf')
 
 
-def make_beta_forest(panel, events):
+def make_beta_forest(events):
     """Noise-corrected beta per firm with 95% intervals, coloured to match
 
     Firms run along the x axis and beta up the y axis, so the panel is wide
     rather than tall and sits beside gap_vs_dtheta.pdf at the same size. The y
     axis is fixed to YLIM; intervals running past it are drawn with an arrow.
 
+    Arguments:
+        events: Event panel from catchup.load_events
+
     Returns: None; writes beta_forest.pdf"""
-    fits = catchup.beta_per_firm(events)
+    fits = per_firm_fits(events)
     order = sorted(fits, key=lambda f: -fits[f]['corrected'])
 
     with plt.rc_context(bigger_text()):
@@ -520,8 +506,7 @@ def make_beta_forest(panel, events):
         save(fig, 'beta_forest.pdf')
 
 
-
-def make_beta_by_level(panel, events):
+def make_beta_by_level(events):
     """Beta once the outgoing model's overall rating is controlled for
 
     A weak model trails everywhere and has more room to improve, so beta could
@@ -533,6 +518,9 @@ def make_beta_by_level(panel, events):
     The control is the OUTGOING model's rating. The incoming model's rating is
     downstream of the outcome -- dtheta is measured against it -- so
     conditioning on it is a bad control and inflates beta.
+
+    Arguments:
+        events: Event panel from catchup.load_events
 
     Returns: None; writes beta_by_level.pdf"""
     pooled, by_bin = catchup.beta_by_level(events)
@@ -593,7 +581,7 @@ def _stars(t):
     return '$^{***}$' if a >= 2.58 else '$^{**}$' if a >= 1.96 else ''
 
 
-def make_confounds_table(panel, events):
+def make_confounds_table(events):
     """Beta under each robustness cut, as a LaTeX table
 
     Covers the three confounds the text raises: which rival defines the gap,
@@ -601,6 +589,9 @@ def make_confounds_table(panel, events):
     the shared baseline rating induces. The last is measured on the raw battle
     dump rather than assumed, and reported in its own panel because it is a
     bias in beta, not another estimate of beta.
+
+    Arguments:
+        events: Event panel from catchup.load_events
 
     Returns: None; prints LaTeX to stdout"""
     table = catchup.robustness_table(events)
@@ -639,8 +630,11 @@ def make_confounds_table(panel, events):
               f'{bias["splits"]} splits over {bias["battles"]:,} battles]')
 
 
-def make_spec_ladder_table(panel, events):
+def make_spec_ladder_table(events):
     """Beta under progressively more demanding fixed effects, as LaTeX
+
+    Arguments:
+        events: Event panel from catchup.load_events
 
     Returns: None; prints LaTeX to stdout"""
     ladder = catchup.fe_ladder(events)
@@ -710,66 +704,15 @@ def _crowding_panels(series, keys, titles, ylabel, color, name, note=None):
     save(fig, name)
 
 
-def make_near_top_counts(panel):
-    """Models within x% of the category leader, over time
-
-    Counts rise both because the top tightens and because the pool grows, so
-    the printed output carries the pool size and the band width in rating
-    points alongside.
-
-    Returns: None; writes near_top_counts.pdf"""
-    counts, _, pcts = crowding.load_series()
-    for label, frame in (('counts', counts), ('band (% of top)', pcts)):
-        print(f'  {label}: ' + ', '.join(
-            f'{k}pt {frame[k].iloc[0]:.1f} -> {frame[k].iloc[-1]:.1f}'
-            for k in crowding.THRESHOLDS))
-
-    _crowding_panels(
-        counts, list(crowding.THRESHOLDS),
-        [f'within {x} points of the leader' for x in crowding.THRESHOLDS],
-        'models', BLUE, 'near_top_counts.pdf')
-
-
-def make_near_top_single(panel, threshold=150):
-    """The near-top count at one threshold, on a tall single panel
-
-    Same series and same styling as the matching panel of near_top_counts.pdf,
-    redrawn on its own at a shape that suits a slide rather than a strip of
-    three: the rise is the point, and a tall axis shows it.
-
-    Arguments:
-        panel: (d, orgs) from similarity.load_default_panel, unused
-        threshold: Rating points below the leader defining the band
-
-    Returns: None; writes near_top_single_tall.pdf"""
-    counts, _, pcts = crowding.load_series()
-    y = counts[threshold]
-    print(f'  within {threshold} points: {y.iloc[0]:.1f} -> {y.iloc[-1]:.1f} models, '
-          f'band {pcts[threshold].iloc[0]:.2f}% -> {pcts[threshold].iloc[-1]:.2f}% of top')
-
-    fig, ax = plt.subplots(figsize=(4.2, 3.6))
-    ax.plot(y.index, y.values, color=BLUE, lw=2.0, zorder=3)
-    ax.fill_between(y.index, 0, y.values, color=BLUE, alpha=0.10, zorder=2)
-    ax.set_title(f'within {threshold} points of the leader', fontsize=13, pad=6)
-    ax.set_ylim(0, float(np.nanmax(y)) * 1.12)
-    ax.set_ylabel('models', fontsize=12)
-    ax.grid(color=GRID, lw=0.6, zorder=0)
-    ax.set_axisbelow(True)
-    strip_axes(ax)
-    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
-    ax.tick_params(axis='x', labelsize=10)
-    fig.tight_layout(pad=0.6)
-    save(fig, 'near_top_single_tall.pdf')
-
-
-def make_top_rank_gaps(panel):
+def make_top_rank_gaps():
     """Rating distance from the category leader to the r-th best model
 
     The mirror image of the count figure, and immune to the growth of the pool
     that inflates it: a fixed rank, a measured distance.
 
-    Returns: None; writes top_rank_gaps.pdf"""
+    Returns: None; writes top_rank_gaps.pdf. Reads its own series from the raw
+        leaderboard rather than the shared snapshot panel, because the crowding
+        measures count every rated model and not only the flagships"""
     _, gaps, _ = crowding.load_series()
     print('  gaps: ' + ', '.join(
         f'r={r} {gaps[r].iloc[0]:.0f} -> {gaps[r].iloc[-1]:.0f}'
@@ -792,7 +735,7 @@ def trio_axes():
     return fig, ax
 
 
-def make_top_distribution(panel):
+def make_top_distribution():
     """Shortfall from the category leader by quantile of the field
 
     Separates a tightening top from a growing pool. A quantile is a position in
@@ -826,12 +769,12 @@ def make_top_distribution(panel):
         save(fig, 'top_distribution.pdf')
 
 
-def make_usage_within_points(panel):
+def make_usage_within_points():
     """Share of OpenRouter tokens served from within x points of the Arena top
 
-    The left panel of openrouter_share_by_threshold.pdf, drawn on its own at
-    the trio width. The matched-token share is marked because the curve cannot
-    rise above it: a slug with no Arena name clears no threshold.
+    Drawn at the trio width. The matched-token share is marked because the
+    curve cannot rise above it: a slug with no Arena name clears no
+    threshold.
 
     Returns: None; writes usage_within_points.pdf"""
     share, coverage = crowding.usage_share_by_threshold()
@@ -856,12 +799,11 @@ def make_usage_within_points(panel):
         save(fig, 'usage_within_points.pdf')
 
 
-def make_effective_number(panel):
+def make_effective_number():
     """Effective number of deployed models and firms, month by month
 
-    The right panel of openrouter_share_by_threshold.pdf, drawn on its own at
-    the trio width. The last month is partial and is dropped, since a half
-    month of tokens concentrates on whatever shipped first.
+    Drawn at the trio width. The last month is partial and is dropped, since
+    a half month of tokens concentrates on whatever shipped first.
 
     Returns: None; writes effective_number.pdf"""
     eff = crowding.effective_counts()
@@ -886,85 +828,46 @@ def make_effective_number(panel):
         save(fig, 'effective_number.pdf')
 
 
-def make_openrouter_share(panel):
-    """Deployment concentration: usage near the frontier, and effective counts
-
-    Left: the share of OpenRouter tokens served by models within x points of
-    the top Arena rating, averaged over months. Right: the inverse-Herfindahl effective
-    number of deployed models and firms over time.
-
-    The last month of the usage panel is partial and is dropped, since a
-    half-month of tokens concentrates on whatever shipped first.
-
-    Returns: None; writes openrouter_share_by_threshold.pdf"""
-    share, coverage = crowding.usage_share_by_threshold()
-    eff = crowding.effective_counts()
-    eff = eff[eff.index < eff.index.max()]
-
-    avg = share.mean()
-    print('  token share within x points of top: ' +
-          ', '.join(f'{x}pt {avg[x]:.3f}' for x in share.columns))
-    print(f'  matched coverage {coverage.mean():.3f}')
-    first, last = eff.iloc[0], eff.iloc[-1]
-    print(f'  effective models {first.eff_models:.1f} -> {last.eff_models:.1f}, '
-          f'firms {first.eff_firms:.1f} -> {last.eff_firms:.1f} '
-          f'({eff.index[0]:%b %Y} to {eff.index[-1]:%b %Y})')
-
-    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(PAIR_WIDTH * 1.35, 1.35))
-
-    xs = list(share.columns)
-    ax.plot(xs, avg.values, color=BLUE, lw=1.8, marker='o', ms=4, zorder=3)
-    ax.axhline(coverage.mean(), color=MUTED, lw=1.0, ls=(0, (3, 2)), zorder=2)
-    ax.annotate('matched tokens', xy=(xs[-1], coverage.mean()), xytext=(-4, 5),
-                textcoords='offset points', ha='right', fontsize=9, color=MUTED)
-    ax.set_xlabel('within $x$ points of the top Arena rating')
-    ax.set_ylabel('share of tokens')
-    ax.set_ylim(0, 0.85)
-    ax.grid(color=GRID, lw=0.6, zorder=0)
-    ax.set_axisbelow(True)
-    strip_axes(ax)
-
-    ax2.plot(eff.index, eff.eff_models, color=BLUE, lw=1.8, label='models', zorder=3)
-    ax2.plot(eff.index, eff.eff_firms, color=ORANGE, lw=1.8, label='firms', zorder=3)
-    ax2.set_title('effective number', fontsize=11, pad=4)
-    # headroom so the legend clears the series in a half-height panel
-    ax2.set_ylim(0, float(eff.eff_models.max()) * 1.45)
-    ax2.set_xlim(eff.index[0], eff.index[-1])
-    ax2.legend(frameon=False, fontsize=9.5, loc='upper left', ncol=2,
-               handlelength=1.2, columnspacing=1.2, borderaxespad=0.2)
-    ax2.grid(color=GRID, lw=0.6, zorder=0)
-    ax2.set_axisbelow(True)
-    strip_axes(ax2)
-    ax2.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
-    ax2.tick_params(axis='x', labelsize=9)
-
-    fig.tight_layout(pad=0.6)
-    save(fig, 'openrouter_share_by_threshold.pdf')
-
-
+# What each figure reads: the snapshot panel, the event panel, or nothing --
+# the crowding figures load their own series. main() builds each source at most
+# once, and only when a figure in the run asks for it.
 FIGURES = {
-    'cosine_kde': make_cosine_kde,
-    'cosine_heatmap': make_cosine_heatmap,
-    'variance_shares': make_variance_shares,
-    'residual_timeseries': make_residual_timeseries,
-    'gap_vs_dtheta': make_gap_vs_dtheta,
-    'beta_forest': make_beta_forest,
-    'beta_by_level': make_beta_by_level,
-    'confounds_table': make_confounds_table,
-    'spec_ladder_table': make_spec_ladder_table,
-    'near_top_counts': make_near_top_counts,
-    'near_top_single': make_near_top_single,
-    'top_rank_gaps': make_top_rank_gaps,
-    'top_distribution': make_top_distribution,
-    'usage_within_points': make_usage_within_points,
-    'effective_number': make_effective_number,
-    'openrouter_share': make_openrouter_share,
+    'cosine_kde': (make_cosine_kde, 'panel'),
+    'cosine_heatmap': (make_cosine_heatmap, 'panel'),
+    'residual_timeseries': (make_residual_timeseries, 'panel'),
+    'gap_vs_dtheta': (make_gap_vs_dtheta, 'events'),
+    'beta_forest': (make_beta_forest, 'events'),
+    'beta_by_level': (make_beta_by_level, 'events'),
+    'confounds_table': (make_confounds_table, 'events'),
+    'spec_ladder_table': (make_spec_ladder_table, 'events'),
+    'top_rank_gaps': (make_top_rank_gaps, None),
+    'top_distribution': (make_top_distribution, None),
+    'usage_within_points': (make_usage_within_points, None),
+    'effective_number': (make_effective_number, None),
 }
 
-# Figures that need the event panel rather than the snapshot panel.
-EVENT_FIGURES = {'gap_vs_dtheta', 'beta_forest', 'beta_by_level',
-                 'confounds_table', 'spec_ladder_table'}
+
+def load_source(name, since, built):
+    """One of the two panels the figures share, built on first use
+
+    Arguments:
+        name: Either 'panel' (the snapshot panel) or 'events'
+        since: Left edge of the snapshot panel
+        built: Dict the panels are cached in for the rest of the run
+
+    Returns: (d, orgs) for 'panel', or the event panel DataFrame for 'events'"""
+    if name not in built:
+        if name == 'panel':
+            d, orgs = S.load_default_panel(since=since)
+            print(f'  panel: {len(orgs)} organizations, '
+                  f'{d.dt.nunique()} snapshots since {since}')
+            built[name] = (d, orgs)
+        else:
+            events = catchup.load_events()
+            print(f'  event panel: {events.event.nunique()} events, '
+                  f'{len(events)} obs, {events.firm.nunique()} firms')
+            built[name] = events
+    return built[name]
 
 
 def main():
@@ -975,22 +878,14 @@ def main():
                         help='left edge of the panel')
     args = parser.parse_args()
 
-    panel = S.load_default_panel(since=args.since)
-    print(f'panel: {len(panel[1])} organizations, '
-          f'{panel[0].dt.nunique()} snapshots since {args.since}\n')
-
     targets = FIGURES if args.figure == 'all' else {args.figure: FIGURES[args.figure]}
-    events = None
-    for name, fn in targets.items():
+    built = {}
+    for name, (draw, source) in targets.items():
         print(f'{name}:')
-        if name in EVENT_FIGURES:
-            if events is None:
-                events = catchup.load_events()
-                print(f'  event panel: {events.event.nunique()} events, '
-                      f'{len(events)} obs, {events.firm.nunique()} firms')
-            fn(panel, events)
+        if source is None:
+            draw()
         else:
-            fn(panel)
+            draw(load_source(source, args.since, built))
 
 
 if __name__ == '__main__':

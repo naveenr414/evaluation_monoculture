@@ -21,9 +21,9 @@ OpenRouter grows a day at a time, so a re-fetch will shift any number computed
 from them.  The summary printed at the end reports the panel dimensions for
 exactly that reason -- it is the set of numbers the data section quotes.
 """
+import argparse
 import os
 import shutil
-import sys
 import time
 from datetime import date
 
@@ -33,8 +33,6 @@ from huggingface_hub import hf_hub_download
 
 from common import RAW
 
-FORCE = '--force' in sys.argv
-
 ARENA_REPO = 'lmarena-ai/leaderboard-dataset'
 ARENA_FILE = 'text/full-00000-of-00001.parquet'
 
@@ -43,15 +41,18 @@ OPENROUTER_START = date(2025, 1, 1)
 REQUEST_PAUSE = 2.5           # 30 requests/minute is the documented ceiling
 
 
-def fetch_arena():
+def fetch_arena(force=False):
     """Download the Arena leaderboard panel to a flat file in raw_data/
 
     The repo nests its configs, so we let hf_hub_download put the file in its
     own cache and copy it out under the name we actually want.
 
+    Arguments:
+        force: Re-download even if the file is already there
+
     Returns: Path to raw_data/leaderboard.parquet"""
     dest = RAW / 'leaderboard.parquet'
-    if dest.exists() and not FORCE:
+    if dest.exists() and not force:
         print(f'  have {dest.name}')
         return dest
 
@@ -95,7 +96,7 @@ def fetch_openrouter_window(session, key, start, end):
     return r.json()['data']
 
 
-def fetch_openrouter():
+def fetch_openrouter(force=False):
     """Walk the OpenRouter history a month at a time and write one parquet
 
     Monthly windows keep each response small and the request count low enough
@@ -109,9 +110,12 @@ def fetch_openrouter():
     it, so a daily total here is top-50 volume, not all OpenRouter volume, and
     anything dividing by it is a share of the top 50.
 
+    Arguments:
+        force: Re-fetch even if the file is already there
+
     Returns: Path to raw_data/openrouter_daily.parquet, or None if skipped"""
     dest = RAW / 'openrouter_daily.parquet'
-    if dest.exists() and not FORCE:
+    if dest.exists() and not force:
         print(f'  have {dest.name}')
         return dest
 
@@ -191,23 +195,34 @@ def describe_openrouter(path):
           f'(min {per_day.min()}, max {per_day.max()})')
 
 
-RAW.mkdir(parents=True, exist_ok=True)
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--force', action='store_true',
+                        help='re-fetch both sources instead of filling gaps')
+    args = parser.parse_args()
 
-print('Arena leaderboard:')
-arena_path = fetch_arena()
+    RAW.mkdir(parents=True, exist_ok=True)
 
-print('\nOpenRouter daily volume:')
-openrouter_path = fetch_openrouter()
+    print('Arena leaderboard:')
+    arena_path = fetch_arena(args.force)
 
-print('\n' + '=' * 62)
-print('ARENA PANEL')
-print('=' * 62)
-describe_leaderboard(arena_path)
+    print('\nOpenRouter daily volume:')
+    openrouter_path = fetch_openrouter(args.force)
 
-if openrouter_path is not None:
     print('\n' + '=' * 62)
-    print('OPENROUTER PANEL')
+    print('ARENA PANEL')
     print('=' * 62)
-    describe_openrouter(openrouter_path)
+    describe_leaderboard(arena_path)
 
-print('\nraw_data/ is ready.')
+    if openrouter_path is not None:
+        print('\n' + '=' * 62)
+        print('OPENROUTER PANEL')
+        print('=' * 62)
+        describe_openrouter(openrouter_path)
+
+    print('\nraw_data/ is ready.')
+
+
+if __name__ == '__main__':
+    main()

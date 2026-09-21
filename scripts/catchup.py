@@ -20,8 +20,9 @@ could be level rather than gap -- `beta_by_level` controls for that.
 import numpy as np
 import pandas as pd
 
-from common import (BATTLES, CORE, FRONTIER, MATURE_DAYS, MIN_EVENTS,
-                    fe_regress, flagships, load_panel, within)
+from common import (BATTLES, CORE, MATURE_DAYS, MIN_EVENTS, changeovers,
+                    event_label, fe_regress, first_mature_snapshot, flagships,
+                    frontier_firms, load_panel, within)
 
 BENCHMARKS = {
     'gap_best': ('v_best', 'best rival'),
@@ -39,8 +40,8 @@ THETA_LOADING = {'theta': 1.0, **{g: -1.0 for g in BENCHMARKS}}
 def build_event_panel(d, cats=CORE, mature_days=MATURE_DAYS, min_rivals=4):
     """One row per (flagship changeover, category)
 
-    `gap_best` reproduces `common.build_events`' `gap`; the other benchmarks
-    are added here because whether beta depends on which rival defines the
+    `gap_best` is the gap the headline regression uses; the other benchmarks
+    are carried because whether beta depends on which rival defines the
     frontier is itself a robustness check.
 
     Arguments:
@@ -58,23 +59,12 @@ def build_event_panel(d, cats=CORE, mature_days=MATURE_DAYS, min_rivals=4):
     flag = flagships(d)
     snaps = np.sort(d.dt.unique())
 
-    changeovers = []
-    for firm in FRONTIER:
-        if firm not in flag.index.get_level_values('org'):
-            continue
-        series = flag.xs(firm, level='org').sort_index()
-        prev_model, prev_t = None, None
-        for t, model in series.items():
-            if prev_model is not None and model != prev_model:
-                changeovers.append((firm, prev_model, model, t, prev_t))
-            prev_model, prev_t = model, t
-
+    firms = frontier_firms()
     rows = []
-    for firm, old, new, switch, t_old in changeovers:
-        later = [s for s in snaps if s >= switch + np.timedelta64(mature_days, 'D')]
-        if not later:
+    for firm, old, new, switch, t_old in changeovers(flag, firms):
+        t_new = first_mature_snapshot(snaps, switch, mature_days)
+        if t_new is None:
             continue
-        t_new = later[0]
         try:
             th_old, th_new = rat.loc[(t_old, old)][cats], rat.loc[(t_new, new)][cats]
             v_old = var.loc[(t_old, old)][cats]
@@ -84,13 +74,13 @@ def build_event_panel(d, cats=CORE, mature_days=MATURE_DAYS, min_rivals=4):
             continue
 
         snap = rat.xs(t_old, level='dt')
-        rivals = [flag.get((t_old, f)) for f in FRONTIER if f != firm]
+        rivals = [flag.get((t_old, f)) for f in firms if f != firm]
         rivals = [m for m in rivals if m is not None and m in snap.index]
         riv = snap.loc[rivals][cats].dropna()
         if len(riv) < min_rivals:
             continue
 
-        event = f'{firm}:{old}->{new}@{pd.Timestamp(switch).strftime("%Y%m%d")}'
+        event = event_label(firm, old, new, switch)
         level = overall.get((t_old, old), np.nan)
         for k in cats:
             ranked = riv[k].sort_values(ascending=False)
@@ -143,10 +133,11 @@ def fit_beta(ev, gap='gap_best', extra=(), fe=('ik', 'kt'), min_events=6,
         min_events: Skip the fit below this many distinct events
         min_resid_df: Skip the fit below this many residual degrees of freedom
 
-    Returns: Dict with beta, se, t, corrected, n, events, firms, and the same
-        four fields prefixed `d_` for the second regressor when `extra` names
-        one -- or None if the subsample is too small, too saturated, or
-        singular"""
+    Returns: Dict with beta, se, t, corrected, se_corrected, t_corrected, n,
+        events and firms, plus delta, se_delta, t_delta, delta_corrected,
+        se_delta_corrected and t_delta_corrected for the second regressor when
+        `extra` names one -- or None if the subsample is too small, too
+        saturated, or singular"""
     if ev.event.nunique() < min_events:
         return None
 
@@ -206,7 +197,7 @@ def beta_per_firm(ev, gap='gap_best', min_events=MIN_EVENTS):
     Returns: Dict keyed by firm, each with beta, se, corrected, and the
         residualized gap and dtheta the scatter plots"""
     out = {}
-    for firm in FRONTIER:
+    for firm in frontier_firms():
         sub = ev[ev.firm == firm]
         if sub.event.nunique() < min_events:
             continue
@@ -266,11 +257,10 @@ def beta_by_level(ev, n_bins=4):
         a DataFrame of one row per level bin"""
     ev = ev.dropna(subset=['level']).copy()
 
-    pooled = pd.DataFrame({
-        'no control': fit_beta(ev),
-        'linear in level': fit_beta(ev, extra=['level']),
-        'linear in theta_ikt': fit_beta(ev, extra=['theta']),
-    }).T
+    specs = {'no control': fit_beta(ev),
+             'linear in level': fit_beta(ev, extra=['level']),
+             'linear in theta_ikt': fit_beta(ev, extra=['theta'])}
+    pooled = pd.DataFrame({k: v for k, v in specs.items() if v is not None}).T
 
     ev['bin'] = pd.qcut(ev.level, n_bins, labels=False, duplicates='drop')
     by_bin = beta_by(ev, 'bin', fe=('ik',))
@@ -419,7 +409,10 @@ def split_half_bias(n_splits=20, min_battles=60, seed=0):
     cols = ['model_a', 'model_b', 'winner', 'category_tag']
     d = pd.concat([pd.read_parquet(f, columns=cols) for f in files],
                   ignore_index=True)
-    d = d[d.winner.isin(['model_a', 'model_b', 'tie', 'both_bad'])].copy()
+    # reset_index, because `half` below is drawn per row of THIS frame and is
+    # indexed into by label: without it the labels still run over the unfiltered
+    # frame and the two halves are misassigned (or the lookup goes out of range).
+    d = d[d.winner.isin(['model_a', 'model_b', 'tie', 'both_bad'])].reset_index(drop=True)
     d['s'] = np.where(d.winner == 'model_a', 1.0,
                       np.where(d.winner == 'model_b', 0.0, 0.5))
     for cat, (block, key) in tags.items():

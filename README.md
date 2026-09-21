@@ -2,21 +2,20 @@
 
 N firms invest across K categories, a central evaluator ranks them with category
 weights w, and the question is what that ranking does to the diversity of what
-gets built. This repository holds the empirical side: three experiments on the
+gets built. This repository holds the empirical side: two experiments on the
 LMArena per-category leaderboard and OpenRouter usage data.
 
 ## Layout
 
-    scripts/          analysis and plotting code for experiments A, B, C
+    scripts/          analysis and plotting code for experiments A and B
     raw_data/         data as downloaded, never edited
     processed_data/   derived panels (currently empty; see note below)
     plots/            figures, one per result
     _archive/         everything from the earlier passes, kept temporarily
     expA_writeup.md   Experiment A results
     expB_writeup.md   Experiment B results
-    expC_writeup.md   Experiment C results
 
-## The three experiments
+## The experiments
 
 **A. Catch-up and specialization.** Do firms close the gap to the category
 leader, and does any firm-specific profile survive? Residual similarity is
@@ -29,10 +28,6 @@ each category has become. `crowding.py` measures that two ways: the number of
 models within x% of the category leader, and the rating distance from the leader
 to the r-th best model. The first grows with the pool of rated models and the
 second does not, so they are reported together.
-
-**C. Production functions.** theta_{i,k} = a_{i,k} phi(x_{i,k}) with investment
-unobserved and a budget constraint. Which production-function families the data
-can distinguish, and what the identified set looks like.
 
 ## Running
 
@@ -50,13 +45,15 @@ The split-half check inside `confounds_table` needs the raw battle dump at
 `_archive/data/140k/data/`, which is not on GitHub. Without it that panel is
 skipped and the rest of the table still builds.
 
-`scripts/common.py` holds the shared layer: `load_panel`, `build_events`,
-`fe_regress`, `two_way_resid`, and the CORE category list. `FRONTIER` is no
-longer a hand-picked roster: `frontier_firms()` derives it from the panel as the
-organizations with at least `MIN_EVENTS` (3) flagship changeovers that survive
-into the event panel, which is the same minimum the per-firm fits need. It is
-computed on first use and cached, and `changeover_counts()` shows the counts
-behind it.
+`scripts/common.py` holds the shared layer: `load_panel`, the flagship and
+changeover helpers (`flagships`, `changeovers`, `first_mature_snapshot`,
+`event_label`), the `within` transform and `fe_regress`, and the CORE category
+list. The firm roster is not hand-picked: `frontier_firms()` derives it from
+the panel as the organizations with at least `MIN_EVENTS` (4) flagship
+changeovers that survive into the event panel, which is the same minimum the
+per-firm fits need. It is computed on first use and cached, and
+`changeover_counts()` shows the counts behind it. The leaderboard parquet is
+parsed once per process and every panel is a filtered view of that one read.
 Every routine noise-corrects using the BT estimator's `variance` column.
 
 ## Data
@@ -99,6 +96,6 @@ every experiment recomputes from the raw panel.
 ## Archive
 
 `_archive/` holds the earlier exploratory passes, the superseded drafts, and the
-~2 GB of datasets those passes pulled. Nothing there is referenced by the three
+~2 GB of datasets those passes pulled. Nothing there is referenced by the
 experiments above. The code is on GitHub; the data in `_archive/data/` is not,
 so move it rather than delete it.

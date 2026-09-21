@@ -3,7 +3,7 @@
 Maps the paper's objects onto the LMArena per-category leaderboard panel:
     theta_{i,k}  = BT rating of firm i's flagship model in category k
     K            = CORE categories
-    N            = FRONTIER firms (derived; see `frontier_firms`)
+    N            = the firms `frontier_firms` derives from the panel
 Every routine here noise-corrects using the `variance` column (the BT estimator's
 sampling variance), which is 100% populated from 2024 onward.
 """
@@ -28,14 +28,6 @@ BATTLES = ROOT / '_archive' / 'data' / '140k' / 'data'
 
 CORE = ['coding', 'math', 'hard_prompts', 'instruction_following',
         'creative_writing', 'longer_query', 'multi_turn', 'english']
-INDUSTRY = ['industry_business_and_management_and_financial_operations',
-            'industry_entertainment_and_sports_and_media',
-            'industry_legal_and_government',
-            'industry_life_and_physical_and_social_science',
-            'industry_mathematical',
-            'industry_medicine_and_healthcare',
-            'industry_software_and_it_services',
-            'industry_writing_and_literature_and_language']
 MATURE_DAYS = 56
 
 # A firm enters the sample once it has enough flagship changeovers to fit a
@@ -44,18 +36,47 @@ MATURE_DAYS = 56
 MIN_EVENTS = 4
 
 
-def load_panel(path=PANEL, cats=None, firms_only=True, since='2024-01-01'):
+@lru_cache(maxsize=None)
+def _read_panel(path):
+    """The raw leaderboard with its derived columns, read once per process
+
+    Every routine here starts from the same file, and a full run reads it half
+    a dozen times, so the parse is cached. Callers only ever see the result of
+    a boolean mask over it, which is a fresh frame, so the cached copy cannot
+    be mutated from underneath them.
+
+    Arguments:
+        path: Path to the leaderboard parquet
+
+    Returns: DataFrame with `dt` (snapshot date) and `org` (lowercase
+        organization) added, and rows with a blank organization dropped"""
     d = pd.read_parquet(path)
     d['dt'] = pd.to_datetime(d.leaderboard_publish_date)
     d['org'] = d.organization.str.lower()
-    d = d[d.org.notna() & (d.org.str.strip() != '')]
+    # The organization field goes blank from 2026-04-02 onward, ~5% of rows.
+    # They are unusable for anything firm-keyed, so they never enter the panel.
+    return d[d.org.notna() & (d.org.str.strip() != '')].reset_index(drop=True)
+
+
+def load_panel(path=PANEL, cats=None, firms_only=True, since='2024-01-01'):
+    """The leaderboard panel, filtered to the rows an experiment wants
+
+    Arguments:
+        path: Path to the leaderboard parquet
+        cats: Categories to keep, `overall` always included, or None for all
+        firms_only: Keep only the organizations `frontier_firms` derives
+        since: Left edge of the panel, or None for no cut
+
+    Returns: DataFrame, one row per (snapshot, model, category)"""
+    d = _read_panel(path)
+    keep = pd.Series(True, index=d.index)
     if cats is not None:
-        d = d[d.category.isin(list(cats) + ['overall'])]
+        keep &= d.category.isin(list(cats) + ['overall'])
     if firms_only:
-        d = d[d.org.isin(frontier_firms())]
+        keep &= d.org.isin(frontier_firms())
     if since:
-        d = d[d.dt >= since]
-    return d
+        keep &= d.dt >= pd.Timestamp(since)
+    return d[keep]
 
 
 def changeover_counts(cats=CORE, mature_days=MATURE_DAYS, since='2024-01-01'):
@@ -75,25 +96,19 @@ def changeover_counts(cats=CORE, mature_days=MATURE_DAYS, since='2024-01-01'):
     rat = d.pivot_table(index=['dt', 'model_name'], columns='category', values='rating')
     flag = flagships(d)
     snaps = np.sort(d.dt.unique())
-    orgs = flag.index.get_level_values('org').unique()
 
-    counts = {}
-    for org in orgs:
-        series = flag.xs(org, level='org').sort_index()
-        prev_model, prev_t, n = None, None, 0
-        for t, model in series.items():
-            if prev_model is not None and model != prev_model:
-                later = [s for s in snaps if s >= t + np.timedelta64(mature_days, 'D')]
-                if later:
-                    try:
-                        old = rat.loc[(prev_t, prev_model)][cats]
-                        new = rat.loc[(later[0], model)][cats]
-                        if not (old.isna().any() or new.isna().any()):
-                            n += 1
-                    except KeyError:
-                        pass
-            prev_model, prev_t = model, t
-        counts[org] = n
+    counts = {org: 0 for org in flag.index.get_level_values('org').unique()}
+    for org, old, new, switch, t_old in changeovers(flag):
+        t_new = first_mature_snapshot(snaps, switch, mature_days)
+        if t_new is None:
+            continue
+        try:
+            th_old = rat.loc[(t_old, old)][cats]
+            th_new = rat.loc[(t_new, new)][cats]
+        except KeyError:
+            continue
+        if not (th_old.isna().any() or th_new.isna().any()):
+            counts[org] += 1
     return pd.Series(counts).sort_values(ascending=False)
 
 
@@ -113,96 +128,93 @@ def frontier_firms(min_events=MIN_EVENTS):
     return sorted(counts[counts >= min_events].index)
 
 
-def __getattr__(name):
-    """Compute FRONTIER on first use, so importing this module stays cheap."""
-    if name == 'FRONTIER':
-        return frontier_firms()
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-
-
 def flagships(d):
-    """Highest 'overall'-rated model per (snapshot, firm)."""
+    """The model standing in for each firm at each snapshot
+
+    A firm ships several models at once, so one has to stand for the firm.
+    That is its best `overall` model: the one the evaluator itself ranks
+    highest, rather than whichever model happens to lead a given category.
+
+    Arguments:
+        d: Panel DataFrame from `load_panel`
+
+    Returns: Series of model names indexed by (dt, org)"""
     ov = d[d.category == 'overall'].dropna(subset=['rating'])
     return (ov.sort_values('rating').groupby(['dt', 'org']).tail(1)
               .set_index(['dt', 'org']).model_name)
 
 
-def build_events(d, cats=CORE, mature_days=MATURE_DAYS):
-    """One row per (flagship changeover event, category).
+def changeovers(flag, orgs=None):
+    """Every point at which a firm's flagship model changes
 
-    dtheta = new flagship rating - outgoing flagship rating
-    gap    = rivals' per-category frontier - outgoing flagship rating
-    gap_teacher = best-overall rival's rating - outgoing flagship rating
-    """
-    rat = d.pivot_table(index=['dt', 'model_name'], columns='category', values='rating')
-    var = d.pivot_table(index=['dt', 'model_name'], columns='category', values='variance')
-    flag = flagships(d)
-    snaps = np.sort(d.dt.unique())
+    One release episode per tuple. The switch date is carried because a firm
+    can toggle between the same two model names at different dates -- a
+    thinking-mode variant launched, reverted, then relaunched -- and those are
+    independent episodes that a name-only label would pool into one.
 
-    events = []
-    for firm in FRONTIER:
-        if firm not in flag.index.get_level_values('org'):
-            continue
-        ser = flag.xs(firm, level='org').sort_index()
-        prev_m, prev_t = None, None
-        for t, m in ser.items():
-            if prev_m is not None and m != prev_m:
-                events.append((firm, prev_m, m, t, prev_t))
-            prev_m, prev_t = m, t
+    Arguments:
+        flag: Series from `flagships`, indexed by (dt, org)
+        orgs: Organizations to walk, or None for every one in `flag`
 
-    ov_rat = d[d.category == 'overall'].pivot_table(
-        index='dt', columns='model_name', values='rating')
+    Returns: List of (org, outgoing model, incoming model, switch date,
+        last snapshot the outgoing model was the flagship at)"""
+    present = flag.index.get_level_values('org').unique()
+    out = []
+    for org in (present if orgs is None else [o for o in orgs if o in present]):
+        series = flag.xs(org, level='org').sort_index()
+        prev_model, prev_t = None, None
+        for t, model in series.items():
+            if prev_model is not None and model != prev_model:
+                out.append((org, prev_model, model, t, prev_t))
+            prev_model, prev_t = model, t
+    return out
 
-    rows = []
-    for firm, old, new, switch, t_old in events:
-        cand = [s for s in snaps if s >= switch + np.timedelta64(mature_days, 'D')]
-        if not cand:
-            continue
-        t_new = cand[0]
-        try:
-            th_old, th_new = rat.loc[(t_old, old)][cats], rat.loc[(t_new, new)][cats]
-            v_old, v_new = var.loc[(t_old, old)][cats], var.loc[(t_new, new)][cats]
-        except KeyError:
-            continue
-        if th_old.isna().any() or th_new.isna().any():
-            continue
 
-        snap = rat.xs(t_old, level='dt')
-        rivals = [flag.get((t_old, f)) for f in FRONTIER if f != firm]
-        rivals = [m for m in rivals if m is not None and m in snap.index]
-        riv = snap.loc[rivals][cats].dropna()
-        if len(riv) < 3:
-            continue
-        frontier = riv.max(axis=0)
-        v_front = np.array([var.loc[(t_old, riv[k].idxmax())][k] for k in cats])
+def first_mature_snapshot(snaps, switch, mature_days=MATURE_DAYS):
+    """The first snapshot far enough after a switch to read the new model at
 
-        # distillation candidate: single best-overall rival at t_old
-        ov_t = ov_rat.loc[t_old, [m for m in riv.index if m in ov_rat.columns]].dropna()
-        teacher = ov_t.idxmax() if len(ov_t) else None
-        th_teach = riv.loc[teacher] if teacher in riv.index else pd.Series(np.nan, index=cats)
-        # per-category frontier excluding the teacher
-        riv_x = riv.drop(index=[teacher]) if teacher in riv.index else riv
-        front_x = riv_x.max(axis=0) if len(riv_x) else pd.Series(np.nan, index=cats)
+    A model's rating churns for weeks after release while votes accumulate, so
+    the incoming model is read once it has had `mature_days` to settle.
 
-        for j, k in enumerate(cats):
-            rows.append(dict(
-                # event label disambiguated by switch date: a firm can toggle between the
-                # same two model names at different dates (e.g. a thinking-mode variant
-                # launched, reverted, relaunched), which otherwise collides two independent
-                # release episodes under one label and gets silently pooled by groupby('event')
-                event=f'{firm}:{old}->{new}@{pd.Timestamp(switch).strftime("%Y%m%d")}',
-                firm=firm, cat=k, switch=switch,
-                dtheta=th_new[k] - th_old[k],
-                gap=frontier[k] - th_old[k],
-                gap_teacher=th_teach[k] - th_old[k],
-                gap_excl_teacher=front_x[k] - th_old[k],
-                teacher=teacher,
-                v_old=v_old[k], v_new=v_new[k], v_front=v_front[j]))
-    return pd.DataFrame(rows)
+    Arguments:
+        snaps: Sorted array of snapshot dates
+        switch: Date the flagship changed
+        mature_days: Days to wait before reading the incoming model
+
+    Returns: Timestamp, or None when the panel ends before the model matures"""
+    ready_at = pd.Timestamp(switch).to_datetime64() + np.timedelta64(mature_days, 'D')
+    i = int(np.searchsorted(snaps, ready_at))
+    return snaps[i] if i < len(snaps) else None
+
+
+def event_label(firm, old, new, switch):
+    """The key that identifies one release episode
+
+    Arguments:
+        firm: Organization slug
+        old: Outgoing flagship model name
+        new: Incoming flagship model name
+        switch: Date the flagship changed
+
+    Returns: String, unique per episode (see `changeovers` on why the date is
+        part of it)"""
+    return f'{firm}:{old}->{new}@{pd.Timestamp(switch).strftime("%Y%m%d")}'
 
 
 def within(series, *group_arrays, iters=60):
-    """Iterative demeaning = multi-way fixed effects within transform."""
+    """Residual of a column after absorbing several sets of fixed effects
+
+    Alternating projections: demeaning by one grouping undoes part of the
+    previous one, so the passes are repeated until the column stops moving.
+    For one or two groupings this converges long before the default iteration
+    count, which is why there is no tolerance to tune.
+
+    Arguments:
+        series: Values to transform
+        group_arrays: One array of group labels per set of fixed effects
+        iters: Demeaning passes over the full set of groupings
+
+    Returns: Array of within-transformed values, in the input order"""
     s = pd.Series(np.asarray(series, dtype=float)).reset_index(drop=True)
     gs = [pd.Series(np.asarray(g)).reset_index(drop=True) for g in group_arrays]
     for _ in range(iters):
@@ -212,17 +224,35 @@ def within(series, *group_arrays, iters=60):
 
 
 def fe_regress(y, X, groups, noise_cov=None, noise_var=None, cluster=None):
-    """Multi-way FE regression with optional errors-in-variables correction.
+    """Multi-way FE regression, optionally corrected for measurement error
 
-    noise_cov : vector, per-regressor spurious covariance with y (subtracted)
-    noise_var : matrix, spurious variance/covariance among regressors (subtracted)
+    The correction subtracts the moments that noise alone contributes, so it
+    shrinks the denominator of the estimate: the corrected coefficient carries
+    more sampling error than the raw one, and `se_c` propagates the same
+    Var(X'y) through the shrunken system rather than reusing the raw standard
+    error. For a single regressor that works out to `se` scaled by
+    Sxx / (Sxx - noise). It treats the leaderboard's reported variances as
+    known, so the corrected interval is a lower bound on the true uncertainty.
 
-    Returns (beta, se, beta_c, resid, dfac, se_c). The corrected estimate solves
-    a system with a shrunken denominator, so it carries more sampling error than
-    the raw one; `se_c` propagates the same Var(X'y) through that system, which
-    for one regressor is just se scaled by Sxx / (Sxx - noise). It treats the
-    reported variances as known, so it is a lower bound on the true uncertainty.
-    """
+    The within transform costs degrees of freedom, and the noise moments are
+    per-observation, so both are scaled by `dfac` here -- callers pass the raw
+    moments and must not scale them again.
+
+    Arguments:
+        y: Outcome vector
+        X: Regressor matrix, one column per regressor
+        groups: One array of group labels per set of fixed effects
+        noise_cov: Per-regressor spurious covariance with y, or None to skip
+            the correction entirely
+        noise_var: Spurious variance/covariance matrix among the regressors,
+            or None to treat the regressors as measured without error
+        cluster: Cluster labels for the standard errors, or None for
+            homoskedastic ones
+
+    Returns: (beta, se, beta_c, resid, dfac, se_c) -- the raw coefficients and
+        their standard errors, the corrected coefficients, the within-residual,
+        the degrees-of-freedom factor, and the corrected standard errors.
+        beta_c and se_c are None when `noise_cov` is not given"""
     n = len(y)
     yw = within(y, *groups)
     Xw = np.column_stack([within(X[:, j], *groups) for j in range(X.shape[1])])
@@ -256,28 +286,3 @@ def fe_regress(y, X, groups, noise_cov=None, noise_var=None, cluster=None):
         M = np.linalg.solve(A, XtX)
         se_c = np.sqrt(np.diag(M @ V @ M.T))
     return beta, np.sqrt(np.diag(V)), beta_c, resid, dfac, se_c
-
-
-def two_way_resid(P):
-    R = P - P.mean(1, keepdims=True)
-    return R - R.mean(0, keepdims=True)
-
-
-def firm_profiles(d, cats, date, value='rating'):
-    """One flagship per firm at `date`; returns (profiles, variances, firm names)."""
-    rat = d.pivot_table(index=['dt', 'model_name'], columns='category', values=value)
-    var = d.pivot_table(index=['dt', 'model_name'], columns='category', values='variance')
-    flag = flagships(d)
-    names, P, V = [], [], []
-    for f in FRONTIER:
-        m = flag.get((date, f))
-        if m is None:
-            continue
-        try:
-            r, v = rat.loc[(date, m)][cats], var.loc[(date, m)][cats]
-        except KeyError:
-            continue
-        if r.isna().any():
-            continue
-        names.append(f); P.append(r.values); V.append(v.values)
-    return np.array(P), np.array(V), names
