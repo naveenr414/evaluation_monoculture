@@ -12,7 +12,6 @@ _archive/data/
 *.csv
 
 # Stray scp/rsync artifacts
-naveenr@*
 
 # Python
 __pycache__/

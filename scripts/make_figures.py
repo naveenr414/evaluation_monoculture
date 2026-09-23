@@ -10,6 +10,7 @@ Experiment A, specialization:
     cosine_kde           observed pairwise cosines against the permutation null
     cosine_heatmap       the mean pairwise cosine matrix, hierarchically ordered
     residual_timeseries  (org, category) residual trajectories over the panel
+    residual_norm        mean length of a firm's residual, by quarter
 
 Experiment A, catch-up:
     gap_vs_dtheta        improvement against the gap, one line per firm
@@ -22,7 +23,7 @@ Experiment B, the shrinking top:
     top_rank_gaps        leader-to-rank-r distance, per snapshot
     top_distribution     shortfall from the leader by quantile of the field
     usage_within_points  token share served from within x points of the top
-    effective_number     effective number of deployed models and firms
+    effective_number     effective number of deployed models and developers
 
 The snapshot panel is loaded once and shared, and the event panel is built once
 on the first figure that needs it.
@@ -68,8 +69,13 @@ OTHER_FIRM = '#9aa3ad'
 # they are drawn at one size: same width, same height, same font scale. Text
 # then comes out the same size in both without either being rescaled in LaTeX.
 PAIR_WIDTH = 5.2
-PAIR_SIZE = (3.8, 2.7)
+PAIR_SIZE = (3.8, 2.3)
 PAIR_FONT = 4
+
+# residual_timeseries.pdf and residual_norm.pdf are drawn at half the text
+# width, so both are included at 0.5\textwidth and sit side by side. They are
+# the same size, so their type comes out the same size on the page.
+HALF_SIZE = (3.3, 2.1)
 
 # top_distribution.pdf, usage_within_points.pdf and effective_number.pdf are
 # laid out as a row of three. They are drawn one-third of the width a
@@ -78,6 +84,10 @@ PAIR_FONT = 4
 # labels legible once the panel is this narrow.
 TRIO_SIZE = (PAIR_WIDTH * 1.35 / 3, 1.75)
 TRIO_FONT = -2
+# Points added back on top of TRIO_FONT for the text that has to survive the
+# rescaling: tick labels, axis labels and the legend. The panels are set at a
+# third of the text width, and that text is what stops being readable first.
+TRIO_BUMP = 2
 
 # residual_cosine_kde.pdf and residual_cosine_heatmap.pdf are the other pair.
 # Both are set short; type sizes are left alone, so shortening them raises the
@@ -96,6 +106,18 @@ TRIO_FONT = -2
 KDE_W, KDE_H = 4.0, 1.15
 HEAT_H = 2.66
 HEAT_FONT = 16
+
+# top_rank_gaps is set at a third of the text width, so its axes carry two tick
+# labels each, at a size that survives the rescaling.
+CROWDING_TICK = 12
+
+# Row labels for beta_by_level's left panel, which shows only these two specs.
+SPEC_LABEL = {'linear in level': 'linear'}
+
+# Two-line axis labels (a symbol over its plain-language gloss) in gap_vs_dtheta,
+# and the pooled estimate annotated inside the same panel.
+LABEL_FONT = 13
+POOLED_FONT = 13
 
 # Fixed y limits for beta_forest.pdf, so a wide interval cannot flatten the rest.
 YLIM = (-2.0, 2.0)
@@ -243,7 +265,7 @@ def make_cosine_kde(panel):
     # quarter of the figure. Stretching the y axis is the cheaper of the two.
     peak = max(gaussian_kde(v, bw_method=0.15)(xs).max() for v in (null, observed))
     ax.set_ylim(0, peak * 1.42)
-    ax.set_xlabel(r'$\cos(R_i, R_{i\prime})$')
+    ax.set_xlabel(r'$\cos(r_i, r_{i\prime})$')
     ax.set_ylabel('density')
     ax.grid(axis='y', color=GRID, lw=0.6)
     ax.set_axisbelow(True)
@@ -324,7 +346,7 @@ def make_cosine_heatmap(panel):
     # KDE's 9.8pt. Widening the colorbar also lowers the figure's aspect
     # slightly, which is why HEAT_FONT appears in the width split.
     cb = fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.03)
-    cb.set_label(r'$\cos(R_i, R_{i\prime})$', fontsize=HEAT_FONT)
+    cb.set_label(r'$\cos(r_i, r_{i\prime})$', fontsize=HEAT_FONT)
     cb.ax.tick_params(labelsize=HEAT_FONT - 2)
     cb.outline.set_visible(False)
     save(fig, 'residual_cosine_heatmap.pdf')
@@ -339,6 +361,21 @@ def trailing_run(series):
     Returns: Int, length of the run of one sign ending at the last value"""
     same_sign = np.sign(series) == np.sign(series.iloc[-1])
     return int(same_sign.iloc[::-1].cumprod().sum())
+
+
+def year_ticks(ax):
+    """Label the x axis with one tick per January, the year alone
+
+    The residual figures are half the text width, where a month-and-year label
+    every other tick is unreadable and the month is not what is being read off.
+
+    Arguments:
+        ax: Axes with dates on the x axis
+
+    Returns: None; modifies ax in place"""
+    ax.xaxis.set_major_locator(mdates.YearLocator(month=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=(4, 7, 10)))
 
 
 def make_residual_timeseries(panel, n_highlight=2, smooth=5):
@@ -365,35 +402,102 @@ def make_residual_timeseries(panel, n_highlight=2, smooth=5):
     print('  highlighted:', ', '.join(f'{label_org(o)}/{DISPLAY_CAT.get(c, c)}'
                                       for o, c in top))
 
-    fig, ax = plt.subplots(figsize=(6.6, 3.0))
+    fig, ax = plt.subplots(figsize=HALF_SIZE)
     for col in wide.columns:
         if col not in top:
-            ax.plot(wide.index, wide[col], color=BASELINE, lw=0.5, alpha=0.5)
+            ax.plot(wide.index, wide[col], color=BASELINE, lw=0.4, alpha=0.35,
+                    solid_capstyle='round')
+    lines = []
     for col, color in zip(top, (BLUE, ORANGE)):
-        ax.plot(wide.index, wide[col], color=color, lw=1.8,
-                label=f'{label_org(col[0])} / {DISPLAY_CAT.get(col[1], col[1])}')
+        lines += ax.plot(wide.index, wide[col], color=color, lw=1.5,
+                         solid_capstyle='round')
 
-    ax.axhline(0, color=MUTED, lw=0.8, ls=':')
-    ax.set_ylabel('two-way residual (rating points)')
-    ax.grid(axis='y', color=GRID, lw=0.6)
+    ax.axhline(0, color=MUTED, lw=0.7, ls=(0, (1, 2)), zorder=1)
+    ax.set_ylabel('residual')
+    # Left edge at the January the panel opens in, so the year tick lands on
+    # the axis rather than just off it.
+    ax.set_xlim(wide.index[0].replace(month=1, day=1), wide.index[-1])
+    year_ticks(ax)
+    ax.grid(axis='y', color=GRID, lw=0.5)
     ax.set_axisbelow(True)
     strip_axes(ax)
-    ax.legend(frameon=False, fontsize=10, loc='upper center', ncol=2,
-              bbox_to_anchor=(0.5, 1.13))
-    fig.tight_layout(pad=0.6)
+    # The two highlighted pairs are both one firm's, so the firm goes in the
+    # legend title and each entry is just its category: at this width the
+    # repeated name would take the line the labels need.
+    one_firm = len({col[0] for col in top}) == 1
+    title = label_org(top[0][0]) if one_firm else None
+    labels = [DISPLAY_CAT.get(col[1], col[1]) if one_firm else
+              f'{label_org(col[0])} / {DISPLAY_CAT.get(col[1], col[1])}'
+              for col in top]
+    ax.legend(lines, labels, title=title, frameon=False, fontsize=8.5,
+              title_fontsize=8.5, alignment='center', handlelength=1.4,
+              handletextpad=0.5, labelspacing=0.25, borderaxespad=0.0,
+              loc='lower center', ncol=2, columnspacing=1.2,
+              bbox_to_anchor=(0.5, 1.0))
+    fig.tight_layout(pad=0.4)
     save(fig, 'residual_timeseries.pdf')
 
 
+def make_residual_norm(panel, freq='QE'):
+    """How long the average developer's residual is, quarter by quarter
+
+    ||r_{i,.,t}||_2 is the size of developer i's specialization at t, and its
+    mean over developers is the level of specialization in the field. The
+    roster grows over the panel, so the balanced line -- the developers rated
+    in every quarter -- is drawn beside it: the two agree on the rise through 2025 and differ on
+    how much of the fall since is composition.
+
+    Arguments:
+        panel: (d, orgs) from similarity.load_default_panel
+        freq: String, pandas period alias for the grouping
+
+    Returns: None; writes residual_norm.pdf"""
+    rp = S.residual_panel(*panel)
+    full = S.residual_norms(rp, freq=freq)
+    bal = S.residual_norms(rp, freq=freq, balanced=True)
+    for name, t in (('all', full), ('balanced', bal)):
+        print(f'  {name:9s} {t.norm.iloc[0]:.1f} -> {t.norm.max():.1f} '
+              f'({t.norm.idxmax().to_period("Q")}) -> {t.norm.iloc[-1]:.1f}, '
+              f'{t.n_firms.iloc[-1]} developers')
+
+    # `residual_norms` indexes by period end; each quarter's mean is drawn at
+    # its midpoint, and the axis spans the quarters themselves, so the January
+    # ticks fall inside it.
+    q = full.index.to_period('Q')
+    mid = q.start_time + (q.end_time - q.start_time) / 2
+
+    fig, ax = plt.subplots(figsize=HALF_SIZE)
+    ax.plot(mid, bal.norm, color=MUTED, lw=1.2, ls=(0, (3, 2)),
+            label=f'balanced ({bal.n_firms.iloc[-1]} developers)')
+    ax.fill_between(mid, full.norm - full.se, full.norm + full.se,
+                    color=BLUE, alpha=0.16, lw=0)
+    ax.plot(mid, full.norm, color=BLUE, lw=1.8, marker='o', ms=3.2,
+            label=f'all developers ({full.n_firms.max()})')
+
+    ax.set_ylabel('residual norm')
+    ax.set_xlim(q.start_time[0], q.end_time[-1])
+    year_ticks(ax)
+    ax.grid(axis='y', color=GRID, lw=0.5)
+    ax.set_axisbelow(True)
+    strip_axes(ax)
+    ax.legend(frameon=False, fontsize=8.5, handlelength=1.6, labelspacing=0.3,
+              borderaxespad=0.0, loc='lower left')
+    fig.tight_layout(pad=0.4)
+    save(fig, 'residual_norm.pdf')
+
+
 def make_gap_vs_dtheta(events):
-    """Improvement against the gap, one noise-corrected line per firm
+    """Improvement against the gap, with the pooled noise-corrected fit
 
     Both axes are residualized on event and category, so the comparison is
     "within this release, which category lagged more" rather than how big the
-    release was overall. Each firm's line is its own beta through the origin.
-    The roster is large enough that labelling every firm is unreadable, so all
-    firm lines are drawn as one band and only the pooled fit is called out.
-    Singling out individual firms here invited reading a single line as a
-    result; the per-firm estimates and their intervals are in beta_forest.pdf.
+    release was overall. The pooled line through the origin is the result, and
+    the band around it is its 95% interval.
+
+    Only the pooled fit is drawn. The per-firm lines used to be drawn faintly
+    behind it, but they made a fan that competed with the line the figure is
+    about, and beta_forest.pdf beside it already shows firm heterogeneity with
+    intervals the fan could not carry.
 
     Arguments:
         events: Event panel from catchup.load_events
@@ -407,37 +511,51 @@ def make_gap_vs_dtheta(events):
               f'raw {r["beta"]:+.2f}  events {r["events"]}')
 
     pooled = catchup.fit_beta(events)
+    beta, se = pooled['corrected'], pooled['se_corrected']
+    print(f'  pooled     corrected {beta:+.2f} (se {se:.2f})  '
+          f'raw {pooled["beta"]:+.2f}  events {pooled["events"]}')
+
+    # The residualized points are the per-firm fits' own regressors, pooled.
     gaps = np.concatenate([fits[f]['gap'] for f in order])
     dthetas = np.concatenate([fits[f]['dtheta'] for f in order])
-    # cap at the 97th percentile: a few single-event outliers otherwise stretch
-    # the lines into a fan that is mostly extrapolation
+    # cap at the 97th percentile: a few single-event outliers otherwise leave
+    # the axes mostly empty around a cloud in the middle
     xmax, ymax = np.percentile(np.abs(gaps), 97), np.percentile(np.abs(dthetas), 97)
 
     with plt.rc_context(bigger_text()):
         fig, ax = plt.subplots(figsize=PAIR_SIZE)
         grid = np.linspace(-xmax, xmax, 50)
 
-        ax.scatter(gaps, dthetas, s=7, color=OTHER_FIRM, alpha=0.30, lw=0, zorder=2)
-        for firm in order:
-            ax.plot(grid, fits[firm]['corrected'] * grid, color=OTHER_FIRM, lw=1.0,
-                    alpha=0.85, zorder=3)
-        ax.plot(grid, pooled['corrected'] * grid, color=INK, lw=2.4, zorder=5,
-                label=rf'pooled $\hat\beta$={pooled["corrected"]:+.2f}')
+        ax.scatter(gaps, dthetas, s=4, color=OTHER_FIRM, alpha=0.18, lw=0, zorder=2)
+        # 95% band for the pooled slope. The fit runs through the origin, so
+        # the band pinches there and widens outward rather than sitting at a
+        # constant width.
+        ax.fill_between(grid, (beta - 1.96 * se) * grid, (beta + 1.96 * se) * grid,
+                        color=INK, alpha=0.12, lw=0, zorder=3)
+        ax.plot(grid, beta * grid, color=INK, lw=2.6, zorder=5)
 
-        ax.axhline(0, color=BASELINE, lw=0.8, zorder=1)
-        ax.axvline(0, color=BASELINE, lw=0.8, zorder=1)
+        # Darker than the grid so the origin reads as an axis, lighter than the
+        # fit so it never competes with it.
+        ax.axhline(0, color=MUTED, lw=0.9, zorder=1)
+        ax.axvline(0, color=MUTED, lw=0.9, zorder=1)
         ax.set_xlim(-xmax, xmax)
         ax.set_ylim(-ymax, ymax)
-        ax.set_xlabel(r'$g_{i,k}$')
-        ax.set_ylabel(r'$\Delta\theta_{i,k}$')
+        # The estimate goes inside the axes: the upper left is empty at a
+        # positive slope, and an annotation there costs none of the panel's
+        # height, where a legend above the frame cost about a sixth of it.
+        ax.annotate(rf'Pooled: $\hat\beta = {beta:.2f}$', xy=(0.03, 0.94),
+                    xycoords='axes fraction', ha='left', va='top',
+                    fontsize=POOLED_FONT, color=INK)
+        # Symbol first, words underneath. Both lines are set below the pair's
+        # label size, because a gloss long enough to run the height of the
+        # panel gets cropped off the top -- which is also why the y axis says
+        # "Improvement" rather than "Subsequent improvement".
+        ax.set_xlabel('$g_{i,k}$\nCompetitive gap', fontsize=LABEL_FONT)
+        ax.set_ylabel(r'$\Delta\theta_{i,k}$' + '\nImprovement',
+                      fontsize=LABEL_FONT)
         ax.grid(color=GRID, lw=0.6, zorder=0)
         ax.set_axisbelow(True)
         strip_axes(ax)
-        # The lines fan out through the origin, so every corner of the axes is
-        # occupied; the legend goes above the frame instead of over the data.
-        ax.legend(frameon=False, loc='lower center', bbox_to_anchor=(0.5, 1.0),
-                  ncol=1, handlelength=1.1, columnspacing=1.2,
-                  handletextpad=0.5, borderaxespad=0.1)
         fig.tight_layout(pad=0.4)
         save(fig, 'gap_vs_dtheta.pdf')
 
@@ -487,8 +605,10 @@ def make_beta_forest(events):
                             xytext=(0, -11 if top else 11), textcoords='offset points',
                             ha='center', va='center', fontsize=8, color=color)
 
-        ax.axhline(0, color=BASELINE, lw=0.9, zorder=1)
-        ax.axhline(1, color=MUTED, lw=0.8, ls=(0, (3, 2)), zorder=1)
+        # Dashed at 0, the null of no catch-up. It used to sit at 1 (a firm
+        # closing its whole deficit in one release), which is not the
+        # comparison any of these intervals is read against.
+        ax.axhline(0, color=MUTED, lw=0.9, ls=(0, (3, 2)), zorder=1)
         ax.set_xticks(range(len(order)))
         # Twelve firm names will not fit horizontally at this width, and at 45
         # degrees the long ones still overlap, so they are set vertically.
@@ -541,7 +661,9 @@ def make_beta_by_level(events):
     ax.plot(pooled.corrected, ypos, 'o', ms=6, color=BLUE, zorder=3)
     ax.axvline(0, color=MUTED, lw=0.8, ls=':')
     ax.set_yticks(ypos)
-    ax.set_yticklabels(pooled.index, fontsize=10)
+    # The spec names are the estimator's keys; the figure only needs to say
+    # what the control is, and the panel beside it already says "level".
+    ax.set_yticklabels([SPEC_LABEL.get(s, s) for s in pooled.index], fontsize=10)
     ax.set_ylim(-0.6, len(pooled) - 0.4)
     ax.set_xlabel(r'$\hat\beta$')
     ax.grid(axis='x', color=GRID, lw=0.6)
@@ -556,7 +678,7 @@ def make_beta_by_level(events):
     # The gap between the first two bins is the one stretch of the panel with
     # no marker and no interval in it, so the label goes there, sitting just
     # above the line rather than on top of it.
-    ax2.annotate('pooled', xy=(xs[:2].mean(), pooled_beta), xytext=(0, 4),
+    ax2.annotate('average', xy=(xs[:2].mean(), pooled_beta), xytext=(0, 4),
                  textcoords='offset points', ha='center', va='bottom',
                  fontsize=9.5, color=BLUE)
     ax2.axhline(0, color=MUTED, lw=0.8, ls=':')
@@ -693,11 +815,15 @@ def _crowding_panels(series, keys, titles, ylabel, color, name, note=None):
         ax.grid(color=GRID, lw=0.6, zorder=0)
         ax.set_axisbelow(True)
         strip_axes(ax)
-        # Half-year ticks: a panel this narrow fits about five dates.
-        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
-        ax.tick_params(axis='x', labelsize=9)
-    axes[0].set_ylabel(ylabel)
+        # One tick per January, labelled with the year alone. A panel this
+        # narrow fits about five dates, but the series is smooth and the reader
+        # only needs to know which year they are looking at -- and at two
+        # labels each can be set large enough to read at a third of the width.
+        ax.xaxis.set_major_locator(mdates.YearLocator(month=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+        ax.tick_params(labelsize=CROWDING_TICK)
+    axes[0].set_ylabel(ylabel, fontsize=CROWDING_TICK + 1)
     if note:
         fig.text(0.5, -0.06, note, ha='center', fontsize=9, color=MUTED)
     fig.tight_layout(pad=0.6)
@@ -727,12 +853,32 @@ def make_top_rank_gaps():
 def trio_axes():
     """A single panel sized to sit one-third of the way across the text
 
+    All three panels of the row share this, so they come out with one tick and
+    axis-label size; `trio_legend` matches it for the two that carry a legend.
+    The axis labels are sized here rather than at each `set_xlabel`, which
+    only replaces the text and leaves the size alone.
+
     Returns: (fig, ax) at TRIO_SIZE, gridded and stripped like the rest"""
     fig, ax = plt.subplots(figsize=TRIO_SIZE)
     ax.grid(color=GRID, lw=0.6, zorder=0)
     ax.set_axisbelow(True)
     strip_axes(ax)
+    ax.tick_params(labelsize=plt.rcParams['xtick.labelsize'] + TRIO_BUMP)
+    for axis in (ax.xaxis, ax.yaxis):
+        axis.label.set_size(plt.rcParams['axes.labelsize'] + TRIO_BUMP)
     return fig, ax
+
+
+def trio_legend(ax, **kwargs):
+    """A frameless legend at the trio's tick size
+
+    Arguments:
+        ax: Axes to put the legend on
+        kwargs: Passed to ax.legend
+
+    Returns: None; adds the legend to ax"""
+    ax.legend(frameon=False, fontsize=plt.rcParams['legend.fontsize'] + TRIO_BUMP,
+              **kwargs)
 
 
 def make_top_distribution():
@@ -764,7 +910,11 @@ def make_top_distribution():
         ax.set_xlabel('quantile of the field')
         ax.set_ylabel(r'$\theta_{(1),k} - \theta$ (points)')
         ax.set_xlim(0, 1)
-        ax.legend(frameon=False, loc='upper left')
+        # Three ticks an axis: the curves are smooth, and at this width the
+        # labels are worth more than the resolution.
+        ax.set_xticks([0, 0.5, 1])
+        ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+        trio_legend(ax, loc='upper left')
         fig.tight_layout(pad=0.4)
         save(fig, 'top_distribution.pdf')
 
@@ -790,17 +940,21 @@ def make_usage_within_points():
         ax.axhline(coverage.mean(), color=MUTED, lw=1.0, ls=(0, (3, 2)), zorder=2)
         # Labelled at the left end, where the curve is still near the floor;
         # at the right end it collides with both the curve and the top spine.
-        ax.annotate('matched tokens', xy=(xs[0], coverage.mean()), xytext=(2, 4),
-                    textcoords='offset points', ha='left', fontsize=7.5, color=MUTED)
-        ax.set_xlabel('within $x$ points of the top')
+        ax.annotate('ceiling', xy=(xs[0], coverage.mean()), xytext=(2, 4),
+                    textcoords='offset points', ha='left', color=MUTED,
+                    fontsize=7.5 + TRIO_BUMP)
+        ax.set_xlabel('difference to frontier (points)')
         ax.set_ylabel('share of tokens')
         ax.set_ylim(0, 0.85)
+        # At the trio tick size matplotlib thins this axis to two labels, and
+        # 0 and 200 is a poor summary of a grid that runs 10 to 300.
+        ax.set_xticks([0, 100, 200, 300])
         fig.tight_layout(pad=0.4)
         save(fig, 'usage_within_points.pdf')
 
 
 def make_effective_number():
-    """Effective number of deployed models and firms, month by month
+    """Effective number of deployed models and developers, month by month
 
     Drawn at the trio width. The last month is partial and is dropped, since
     a half month of tokens concentrates on whatever shipped first.
@@ -810,20 +964,22 @@ def make_effective_number():
     eff = eff[eff.index < eff.index.max()]
     first, last = eff.iloc[0], eff.iloc[-1]
     print(f'  effective models {first.eff_models:.1f} -> {last.eff_models:.1f}, '
-          f'firms {first.eff_firms:.1f} -> {last.eff_firms:.1f} '
+          f'developers {first.eff_firms:.1f} -> {last.eff_firms:.1f} '
           f'({eff.index[0]:%b %Y} to {eff.index[-1]:%b %Y})')
 
     with plt.rc_context(bigger_text(TRIO_FONT)):
         fig, ax = trio_axes()
         ax.plot(eff.index, eff.eff_models, color=BLUE, lw=1.8, label='models', zorder=3)
-        ax.plot(eff.index, eff.eff_firms, color=ORANGE, lw=1.8, label='firms', zorder=3)
+        ax.plot(eff.index, eff.eff_firms, color=ORANGE, lw=1.8, label='developers', zorder=3)
         ax.set_ylabel('effective number')
         ax.set_ylim(0, float(eff.eff_models.max()) * 1.35)
         ax.set_xlim(eff.index[0], eff.index[-1])
-        ax.legend(frameon=False, loc='upper left', ncol=2, handlelength=1.2,
-                  columnspacing=1.0, borderaxespad=0.2)
-        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
+        trio_legend(ax, loc='upper left', ncol=2, handlelength=1.2,
+                    columnspacing=1.0, borderaxespad=0.2)
+        # One tick per January labelled with the year alone, as in
+        # top_rank_gaps: at this width the month adds length, not information.
+        ax.xaxis.set_major_locator(mdates.YearLocator(month=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
         fig.tight_layout(pad=0.4)
         save(fig, 'effective_number.pdf')
 
@@ -835,6 +991,7 @@ FIGURES = {
     'cosine_kde': (make_cosine_kde, 'panel'),
     'cosine_heatmap': (make_cosine_heatmap, 'panel'),
     'residual_timeseries': (make_residual_timeseries, 'panel'),
+    'residual_norm': (make_residual_norm, 'panel'),
     'gap_vs_dtheta': (make_gap_vs_dtheta, 'events'),
     'beta_forest': (make_beta_forest, 'events'),
     'beta_by_level': (make_beta_by_level, 'events'),

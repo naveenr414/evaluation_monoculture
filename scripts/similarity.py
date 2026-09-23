@@ -20,6 +20,7 @@ The pieces here are deliberately separate so they compose:
     variance_shares    how much variance each term absorbs
     pairwise_cosines   the observed similarities
     permutation_null   the same statistic under a null that keeps the structure
+    residual_norms     the size of each firm's residual, by period
 
 `panel_cosines` runs the last two over every snapshot, which is the form the
 figures want.
@@ -160,6 +161,41 @@ def variance_shares_by_period(resid_panel, freq='QE'):
                      'residual': ss_resid / ss_total,
                      'residual_sd': float(resid.std(ddof=0)), 'n_obs': len(g)})
     return pd.DataFrame(rows).set_index('period')
+
+
+def residual_norms(resid_panel, freq='QE', balanced=False):
+    """Each firm's residual length, averaged over the firms in each period
+
+    ||r_{i,.,t}||_2 is how far a firm's profile sits from what its own level
+    and the category means predict, so it is the size of its specialization.
+    Averaging it over firms within a quarter asks whether firms as a whole are
+    getting more or less specialized.
+
+    The roster grows over the panel, so the mean is taken over a different set
+    of firms each quarter.  `balanced` restricts to the firms present in every
+    period, which costs precision but removes composition.
+
+    Arguments:
+        resid_panel: Long DataFrame from `residual_panel`
+        freq: String, pandas period alias for the grouping
+        balanced: Bool, keep only firms rated in every period
+
+    Returns: DataFrame indexed by period with columns norm, se, n_firms,
+        n_obs -- where an obs is one (snapshot, firm)"""
+    per_firm = (resid_panel.groupby(['dt', 'org']).residual
+                .apply(lambda r: float(np.sqrt((r ** 2).sum())))
+                .reset_index(name='norm'))
+    period = pd.Grouper(key='dt', freq=freq)
+
+    if balanced:
+        seen = per_firm.groupby('org').dt.apply(
+            lambda dt: set(dt.dt.to_period(freq[0])))
+        every = set.union(*seen)
+        per_firm = per_firm[per_firm.org.isin(seen[seen == every].index)]
+
+    return per_firm.groupby(period).agg(
+        norm=('norm', 'mean'), se=('norm', 'sem'),
+        n_firms=('org', 'nunique'), n_obs=('norm', 'size'))
 
 
 def pairwise_cosines(R):
