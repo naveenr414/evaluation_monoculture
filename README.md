@@ -1,101 +1,118 @@
-# Evaluation and Monoculture in LLMs
+# Strategic Competition and Convergence in LLM Leaderboards
 
-N firms invest across K categories, a central evaluator ranks them with category
-weights w, and the question is what that ranking does to the diversity of what
-gets built. This repository holds the empirical side: two experiments on the
-LMArena per-category leaderboard and OpenRouter usage data.
+![Paper Overview](figs/pull_figure.png)
 
-## Layout
+This repository contains the implementation for the paper “Strategic
+Competition and Convergence in LLM Leaderboards.”
 
-    scripts/          analysis and plotting code for experiments A and B
-    raw_data/         data as downloaded, never edited
-    processed_data/   derived panels (currently empty; see note below)
-    plots/            figures, one per result
-    _archive/         everything from the earlier passes, kept temporarily
-    expA_writeup.md   Experiment A results
-    expB_writeup.md   Experiment B results
+This work was done by [Naveen Raman](https://naveenraman.com/), [Fei Fang](https://feifang.info/), and [Yiling Chen](https://yiling.seas.harvard.edu/).
 
-## The experiments
+**Paper:** arXiv link coming soon
 
-**A. Catch-up and specialization.** Do firms close the gap to the category
-leader, and does any firm-specific profile survive? Residual similarity is
-measured against a permutation null, because two-way FE residuals have zero row
-and column sums and so sit mechanically near -1/(N-1).
+#### TL;DR
 
-**B. The shrinking top.** Where usage sits relative to the evaluated frontier,
-using OpenRouter token volume matched to Arena names, and how crowded the top of
-each category has become. `crowding.py` measures that two ways: the number of
-models within x% of the category leader, and the rating distance from the leader
-to the r-th best model. The first grows with the pool of rated models and the
-second does not, so they are reported together.
-
-## Running
-
-Scripts resolve paths from their own location, so they run from anywhere, and
-every figure lands in `plots/`:
-
-    python3 scripts/make_figures.py --figure all
-
-`scripts/make_figures.py --figure <name>|all` runs one figure or all of them;
-`confounds_table` and `spec_ladder_table` print LaTeX to stdout rather than
-writing a PDF. Every number in a figure or table comes from `similarity.py`,
-`catchup.py` or `crowding.py`, so figures and text cannot drift apart.
-
-The split-half check inside `confounds_table` needs the raw battle dump at
-`_archive/data/140k/data/`, which is not on GitHub. Without it that panel is
-skipped and the rest of the table still builds.
-
-`scripts/common.py` holds the shared layer: `load_panel`, the flagship and
-changeover helpers (`flagships`, `changeovers`, `first_mature_snapshot`,
-`event_label`), the `within` transform and `fe_regress`, and the CORE category
-list. The firm roster is not hand-picked: `frontier_firms()` derives it from
-the panel as the organizations with at least `MIN_EVENTS` (4) flagship
-changeovers that survive into the event panel, which is the same minimum the
-per-firm fits need. It is computed on first use and cached, and
-`changeover_counts()` shows the counts behind it. The leaderboard parquet is
-parsed once per process and every panel is a filtered view of that one read.
-Every routine noise-corrects using the BT estimator's `variance` column.
+Leaderboards are a popular way to compare large language model (LLM)
+capabilities and can influence how model developers invest resources. We ask
+when competition on leaderboards leads developers to produce models with
+similar capability profiles, which we call monoculture, or similar performance
+levels. We study this by formulating leaderboard competition as a game in which
+model developers invest resources across capabilities to maximize their win
+rate. We show that similar production functions can induce similar capability
+profiles, while comparative advantage can sustain distinct capability profiles.
+We then study convergence in performance levels and show that diminishing
+returns can lead to an increasingly crowded competitive frontier. Using data
+from LM Arena and OpenRouter, we find that developers improve more in
+categories where they lag competitors, while still retaining category-specific
+advantages. At the same time, we find that the frontier of models becomes
+increasingly crowded, alongside increasingly diversified model usage patterns.
+Our results suggest that increasing competition does not need to produce
+interchangeable models, but can instead sustain competitive models with
+distinct strengths.
 
 ## Data
 
-`scripts/fetch_data.py` rebuilds `raw_data/` from scratch. It fetches whatever
-is missing and leaves existing files alone, so it is safe to re-run:
+We rely on two sources of data: leaderboards from LM Arena and usage data from
+OpenRouter.
 
-    python3 scripts/fetch_data.py            # fill in what is missing
-    python3 scripts/fetch_data.py --force    # re-fetch everything
+We use LM Arena to construct leaderboards and better understand how capability
+profiles evolve over time. We construct a panel covering 422 models from 59
+organizations and 28 categories, using the
+“lmarena-ai/leaderboard-dataset” from March 2024 through September 2026. Each
+snapshot contains 28 category-level Elo ratings, along with rating variances
+and vote counts. Of these 28 categories, we focus on 8 (coding, math, hard
+prompts, instruction following, creative writing, longer query, multi-turn,
+and English) because these categories are consistently available since 2024.
 
-The leaderboard half is public. The OpenRouter half needs a key:
+To measure realized model usage, we use daily OpenRouter traffic data from
+January 2025 through September 2026. The data cover 408 models over 620 days.
+We aggregate token shares to the model and developer levels to study how
+changes in the evaluated model frontier correspond to changes in realized model
+usage. We detail how we match data from OpenRouter up with data from LM Arena in
+the analysis code.
 
-    export OPENROUTER_API_KEY=...
+## Setup
 
-Both sources move, so `--force` will change any number computed from them. The
-script prints the panel dimensions at the end for exactly that reason. The
-writeups in this repo were produced on the panel as of 2026-05-27; `raw_data/`
-now runs to 2026-09-13, so their numbers will not reproduce exactly.
+Install the Python dependencies used by the scripts:
 
-`raw_data/leaderboard.parquet` is the workhorse: 1.14M rows, per-category
-ratings for 422 models from 62 organizations across 28 categories, 244 snapshots
-from 2023-05 to 2026-09, with `variance` and `vote_count`. The `variance` column
-is fully populated.
+```bash
+python3 -m pip install numpy pandas pyarrow requests huggingface_hub \
+    scipy matplotlib
+```
 
-`raw_data/openrouter_daily.parquet` is model x day token volume with no category
-breakdown: 31,000 rows, 408 models from 46 organizations over 620 days from
-2025-01 to 2026-09, the top 50 models each day. Matching its slugs to Arena
-names is handled by `scripts/or_arena_match.py`.
+Fetch the data. Existing files are kept unless `--force` is supplied:
 
-Two cautions. The `organization` field goes blank from 2026-04-02 onward --
-about 1,300 rows per snapshot, 5.2% of the panel -- and distinct organizations
-per snapshot fall from 56 to 28. Firm-keyed series therefore still stop at
-2026-03-19 even though the panel now runs to September. And
-`arena_leaderboard.parquet` (in `_archive/`) is overall-only, so it cannot be
-used for profile work.
+```bash
+python3 scripts/fetch_data.py
+python3 scripts/fetch_data.py --force
+```
 
-`processed_data/` is empty because no current script caches an intermediate;
-every experiment recomputes from the raw panel.
+The leaderboard data are public. The OpenRouter data require an API key:
 
-## Archive
+```bash
+export OPENROUTER_API_KEY=...
+python3 scripts/fetch_data.py
+```
 
-`_archive/` holds the earlier exploratory passes, the superseded drafts, and the
-~2 GB of datasets those passes pulled. Nothing there is referenced by the
-experiments above. The code is on GitHub; the data in `_archive/data/` is not,
-so move it rather than delete it.
+Generate all figures in `plots/`:
+
+```bash
+python3 scripts/make_figures.py --figure all
+```
+
+To generate one figure, pass its name instead of `all`, for example:
+
+```bash
+python3 scripts/make_figures.py --figure gap_vs_dtheta
+```
+
+## Repository layout
+
+```text
+scripts/
+    common.py             shared panel loading and estimation utilities
+    similarity.py         capability-profile similarity and null models
+    catchup.py            catch-up regressions and robustness checks
+    crowding.py           frontier crowding and usage calculations
+    or_arena_match.py     OpenRouter-to-LM-Arena model matching
+    fetch_data.py         download and summarize the empirical panels
+    make_figures.py       reproduce the paper figures
+raw_data/                 downloaded parquet data (not tracked by git)
+plots/                    generated figures
+paper.pdf                current manuscript
+pull_figure.pdf          source for the overview figure
+```
+
+## Citation
+
+The citation will be added when the arXiv version is available.
+
+```bibtex
+@article{raman2026strategic,
+  title   = {Strategic Competition and Convergence in LLM Leaderboards},
+  author  = {Raman, Naveen and Fang, Fei and Chen, Yiling},
+  year    = {2026},
+  note    = {Manuscript forthcoming on arXiv}
+}
+```
+
+For questions, contact [Naveen Raman](mailto:naveenr@cmu.edu).

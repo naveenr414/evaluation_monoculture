@@ -10,6 +10,7 @@ processed_data/
 _archive/data/
 *.parquet
 *.csv
+repo.zip
 
 # Stray scp/rsync artifacts
 
