@@ -7,7 +7,7 @@ Competition and Convergence in LLM Leaderboards.”
 
 This work was done by [Naveen Raman](https://naveenraman.com/), [Fei Fang](https://feifang.info/), and [Yiling Chen](https://yiling.seas.harvard.edu/).
 
-**Paper:** arXiv link coming soon
+**Paper:** [https://arxiv.org/abs/2611.09780v1](https://arxiv.org/abs/2611.09780v1)
 
 #### TL;DR
 
@@ -104,14 +104,12 @@ pull_figure.pdf          source for the overview figure
 
 ## Citation
 
-The citation will be added when the arXiv version is available.
-
 ```bibtex
 @article{raman2026strategic,
   title   = {Strategic Competition and Convergence in LLM Leaderboards},
   author  = {Raman, Naveen and Fang, Fei and Chen, Yiling},
-  year    = {2026},
-  note    = {Manuscript forthcoming on arXiv}
+  journal={arXiv preprint arXiv:2611.09780},
+  year={2026}
 }
 ```
 
